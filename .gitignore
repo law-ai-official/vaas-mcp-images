@@ -1,0 +1,76 @@
+# dotenv
+.env
+.env.bak
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project data & private state (NEVER commit)
+demands/
+downloads/
+demand*.md
+data/
+vaas.db
+*.bak
+*.bak-*
+.mcp.json
+
+# Browser profiles & runtime state (logged-in sessions - NEVER commit)
+.profiles/
+# 图文平台登录检测结果落盘（login-manager 面板状态）
+.agents/skills/fd-vaas-login/scripts/.docs_state.json
+# vendored social-auto-upload runtime state (cookies = live logins, logs = per-platform)
+.agents/skills/fd-vaas-publish-videos/scripts/upstream/cookies/
+.agents/skills/fd-vaas-publish-videos/scripts/upstream/logs/
+.agents/skills/fd-vaas-publish-videos/scripts/upstream/.upstream-version
+
+# Remotion: source IS tracked; ignore build output & generated/per-task media
+remotion-app/node_modules/
+remotion-app/out/
+remotion-app/.remotion/
+remotion-app/dist/
+remotion-app/*.mp4
+remotion-app/public/*.mp4
+remotion-app/public/*.mp3
+!remotion-app/public/voice-logo-en.mp3
+!remotion-app/public/voice-logo-zh-clean.mp3
+remotion-app/public/voiceover-*
+remotion-app/public/*captions*.json
+remotion-app/public/vaas-tutorial-*
+remotion-app/public/company-introduce.*
+# 类型化渲染任务产物（<slug>-<key>.<ext>，均无内置资源命名冲突）
+remotion-app/public/*-scenes.json
+remotion-app/public/*-images.json
+remotion-app/public/*-img-*.png
+remotion-app/public/*-img-*.jpg
+remotion-app/public/*-items.json
+remotion-app/public/*-meta.json
+remotion-app/public/*-data.json
+remotion-app/public/*-keywords.json
+
+# ppt-master: 按需从上游 sparse-clone 的重资产技能（~98MB），薄壳 SKILL.md 已 git 跟踪
+.agents/skills/ppt-master/upstream/
+
+# Temp
+tmp/
+temp/
+tmp-*.txt
+*.log
+
+# Python test cache
+.pytest_cache/
