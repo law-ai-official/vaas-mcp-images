@@ -4,9 +4,13 @@
 > 决策依据见 VAAS 仓 `openspec/changes/vaas-mcp-platform-onboarding/design.md`
 > 与工作区 `docs/adr/0004`、`docs/adr/0005`。
 
-**在役布局（2026-10-06 定）**：实例跑 **cheap-2**（tailnet `100.64.0.16`，compose 在
-`/opt/vaas-deploy/`），OpenBAO 留在 cheap-1 registry 栈内并把 8200 加绑 tailnet
-`100.64.0.11`——跨机经 tailnet 取凭证，网关代理可达，部署节点不与 registry 抢资源。
+**参考布局**：实例跑在一台独立节点（下称 `<NODE>`，tailnet `<NODE_IP>`，compose 在
+`<DEPLOY_DIR>/`），OpenBAO 留在 registry 栈内并把 8200 加绑 tailnet `<BAO_IP>`——
+跨机经 tailnet 取凭证，网关代理可达，部署节点不与 registry 抢资源。
+
+> **部署者注意**：下文所有形如 `<NODE>` / `<NODE_IP>` / `<BAO_IP>` 的都是占位符，
+> 替换成你自己的环境值。**本仓库不提供生产坐标**（Git 历史里可能有历史值，仅供回溯，
+> 不要照抄到新环境）。
 
 ## 布局
 
@@ -21,21 +25,46 @@
 | `VAAS_HOSTED=1` | 托管模式开关（工具面收窄 + 身份强制 + vault 凭证） |
 | `VAAS_LINE` | 线池命名（`wanxing` / `base`） |
 | `VAAS_BEARER_TOKEN` | 服务静态 bearer（谦面注册的 egress 凭据同值） |
-| `OPENBAO_ADDR` / `OPENBAO_TOKEN` | bootstrap：密钥库地址（跨机用 `http://100.64.0.11:8200`）+ path 受限 policy token |
+| `OPENBAO_ADDR` / `OPENBAO_TOKEN` | bootstrap：密钥库地址（跨机写你的密钥库地址，如 `http://<BAO_IP>:8200`）+ path 受限 policy token |
 | `VAAS_PORT` / `VAAS_BIND` | 监听（默认 30950 / 0.0.0.0，宿主侧只绑 tailnet IP） |
-| `VAAS_PUBLIC_URL` | 下载签名 URL 的对外基址（`http://100.64.0.16:30950`） |
+| `VAAS_PUBLIC_URL` | 下载签名 URL 的对外基址（`http://<NODE_IP>:30950`） |
 | `VAAS_PRICING_FILE` | 定价表路径（见 `mcp-server/pricing.example.json`） |
 | `VAAS_DOWNLOAD_TTL` / `VAAS_ARTIFACT_TTL_DAYS` / `VAAS_CRED_TTL` | TTL 调参（默认 24h / 30d / 300s） |
 
 ## OpenBAO 路径约定（KV v2，mount `secret`）
 
+凭证按 **kind**（tts / image / video）分池，`provider` 字段声明后端档位
+（`volcengine` 火山方舟直连 | `ciyuan` 萬星·词元车道；缺失按 volcengine 兼容）：
+
 ```
-secret/vaas/pool/<line>/volcengine         # 线池凭证 {api_key, base_url?, model?}
-secret/vaas/service/default/volcengine     # 服务默认凭证
+secret/vaas/pool/<line>/<kind>             # 线池凭证 {api_key, base_url?, model?, provider?, voice?}
+secret/vaas/service/default/<kind>         # 服务默认凭证（同上形状）
 secret/vaas/service/default/download-hmac  # 下载签名密钥 {value}
 ```
 
-## OpenBAO 运维（cheap-1 /opt/mcp-gateway-registry）
+### ciyuan 档记录示例（萬星·词元，2026-10-16 实测可用模型）
+
+```jsonc
+// secret/vaas/pool/wanxing/tts —— 组3 key（chat+三车道分组，用于语音）
+{"api_key": "sk-...", "base_url": "https://router.finddatatech.cloud",
+ "model": "qwen3-tts-flash", "voice": "Cherry", "provider": "ciyuan"}
+
+// secret/vaas/pool/wanxing/image —— 组9 key（图像+视频分组）
+{"api_key": "sk-...", "base_url": "https://router.finddatatech.cloud",
+ "model": "gemini-3-pro-image", "provider": "ciyuan"}
+
+// secret/vaas/pool/wanxing/video —— 组9 key
+{"api_key": "sk-...", "base_url": "https://router.finddatatech.cloud",
+ "model": "doubao-seedance-2-0-fast-260128", "provider": "ciyuan"}
+```
+
+> ⚠️ 词元密钥按「分组」锁能力：**语音一把（组3）、图像+视频一把（组9）**，
+> 一把通吃做不到。配错分组会得到「模型不可路由」类错误，不是密钥错误。
+> 已知缺陷（2026-10-16 实测）：图像 `gpt-image-*` 返回 200 但 body 是 HTML
+> （客户端显式拒绝）；`doubao-seedance-1-0-pro`/`seedance-2-5` 上游 503；
+> ASR 上游账号未配置暂不可用。换模型前先实调。
+
+## OpenBAO 运维（以 registry 栈所在节点为例）
 
 - **生产模式**（2026-10-06 起）：file backend + `./openbao/data` 卷，**重启后 SEALED**。
 - **解封配方**（root-only 文件含 unseal key 与 root token；栈 `.env` 的 OPENBAO_TOKEN
@@ -51,10 +80,10 @@ secret/vaas/service/default/download-hmac  # 下载签名密钥 {value}
 
 ## 謙面注册（`/vaas-wanxing` 先行）
 
-1. registry server 注册：proxy_pass_url = `http://100.64.0.16:30950/mcp`；egress 凭据 =
+1. registry server 注册：proxy_pass_url = `http://<NODE_IP>:30950/mcp`；egress 凭据 =
    `VAAS_BEARER_TOKEN` 同值；**`identity_forwarding: true`**（fork 补丁已实现：
    `~/code/mcp-gateway-registry` 分支 `fd-i18n-ui` commit `9e63c091`，2026-10-06，
-   7537 tests passed；生产部署须先让 cheap-1 栈滚到含此 commit 的镜像）。
+   7537 tests passed；生产部署须先让 registry 栈滚到含此 commit 的镜像）。
 2. Logto group 可见性：仅目标线租户 group 可见。
 3. 网关保守限流（成本保险丝）。
 4. 冒烟：客户 token 经网关 initialize/tools/list（无 publish 工具）→ 生成 →

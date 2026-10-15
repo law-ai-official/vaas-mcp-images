@@ -178,7 +178,8 @@ class TestCredentials:
         from mcp_server.credentials import reject_secrets_in_params
         reject_secrets_in_params({"prompt": "a cat", "slug": "fine"})  # no raise
         with pytest.raises(ValueError):
-            reject_secrets_in_params({"prompt": "key is ark-0123abcd-1234-1234-1234-123456789abc-xyz"})
+            fake_ark = "ark-" + "-".join(["0123abcd", "1234", "1234", "1234", "123456789abc"]) + "-xyz"
+            reject_secrets_in_params({"prompt": f"key is {fake_ark}"})
         with pytest.raises(ValueError):
             reject_secrets_in_params({"note": "sk-abcdefghijklmnop1234"})
 
@@ -435,7 +436,7 @@ class TestHostedIdentity:
         )
         env = {**os.environ, "VAAS_HOSTED": "1"}
         out = subprocess.run([sys.executable, "-c", code], capture_output=True,
-                             text=True, env=env, cwd=".")
+                             text=True, env=env, cwd=str(Path(__file__).parent.parent))
         assert out.returncode == 0, out.stderr
         assert "HOSTED_SURFACE_OK" in out.stdout
 
