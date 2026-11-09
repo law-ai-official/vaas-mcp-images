@@ -102,7 +102,7 @@ VAAS 是架在两半之上的一个**编排层**，自身没有应用代码：
 
 1. **`/fd-vaas-brainstorm`** *（可选）*--给定赛道/主题，按口播 / 图文模式返回选题矩阵（热点/痛点/争议/干货/人设）、脚本框架或图文草稿（Markdown 版 + 纯文本简洁版）、差异化角度，以及可选的完整大纲。内置合规红线：口播稿不出现其他平台名、不引流站外。
 2. **`/fd-vaas-video-creator`**--把文案变成成片。通过**类型注册表**（`new-task --type <id>`）选视频类型，`node scripts/types/list.mjs` 看全部类型。稳定类型：口播 `voiceover`、录屏 `screen-recording`；实验类型：`carousel`（轮播）、`kinetic-quote`（动态金句）、`news-flash`（快讯）、`listicle`（盘点）、`data-viz`（数据可视化）。
-   - **口播视频**：`new-task -> TTS（seed-tts-2.0，返回音频 + 官方逐字时间戳）-> fix-tts-timings（修正 Latin token 的假 endMs）-> scene-align（按口播时间戳重排场景）-> preflight -> Remotion 渲染 -> <slug>.mp4（+ .srt）`。**必须跑 `fix-tts-timings`，否则字幕错位。**
+   - **口播视频**：`new-task -> TTS（volcengine 直连=官方逐字时间戳；词元 ciyuan 档=出口层分段合成+合成字幕，captions_source 可审计）-> fix-tts-timings（修正 Latin token 的假 endMs）-> preflight -> Remotion 渲染 -> <slug>.mp4（+ .srt）`。**必须跑 `fix-tts-timings`，否则字幕错位。**（scene-align 只在五类型模板管线里；口播默认管线无此步。）
    - **录屏/网页操作视频**：用 ego-browser 打开目标页面操作，过程中用 cap 录屏，产出 mp4（可配麦克风解说）。
    所有产物落在 `downloads/fd-videos/<slug>/`，由 `task.json` 管理。画面层 = 已有素材 / seedance 视频 / seedream 图片 / ppt 母带。**内置三大生成器**（TTS / Seedream / Seedance）在 `scripts/generators/`。
 3. **`/fd-vaas-publish-videos`**--一支视频 -> 6 个平台。分发走「**vendor 上游 + 薄适配层**」：上游 `social-auto-upload` vendored 在 `scripts/upstream/`，`sau_adapter.py` 把 CLI 翻译成上游 `<Platform>Video(...).main()` 调用，统一 **py 运行时（patchright）**；bilibili 例外（上游用 biliup 二进制，走本地 `bilibili.py`）。登录态是 cookie 文件（`upstream/cookies/<platform>_uploader/account.json`，快手用 `kuaishou_creator.json`），由 `/fd-vaas-login` 统一扫码。从 `.env` 读取各平台偏好（标签、`BILIBILI_TID`、`TENCENT_SHORT_TITLE`、`YOUTUBE_VISIBILITY`、定时），把结果回写到 `task.json` 的 `distribution[]`。`--dry-run` 可预览命令。
@@ -119,6 +119,20 @@ node $SKILL_V/task-render.mjs --slug <slug>            # -> downloads/fd-videos/
 # 3. 多平台发布
 node $SKILL_P/publish.mjs --slug <slug> --title "…" --platforms douyin,xiaohongshu,bilibili --dry-run
 ```
+
+### 双执行器路由（本地 node 链 vs 托管 HTML 链）
+
+同一支视频有两条渲染执行体，按部署位置选择（能力差异见下表；类型声明 `renderer` 的语义收敛见 `video-types` spec）：
+
+| | 本地 node 链（本节管线） | 托管 HTML 链（hosted MCP `render_video`） |
+|---|---|---|
+| 执行体 | Remotion（`remotion-app/`） | HTML 构建器（`templates/` 本地/容器内一致） |
+| 适用类型 | 全部七类型（type 模式经 HTML 构建器，Remotion 族托管指路报错） | 五类型模板 + storyboard 自定义 |
+| BGM | ❌ 暂不支持（v1 不对称披露；接线另账） | ✅ 支持 |
+| 字幕粒度 | 逐字/词级时间戳（fix-tts-timings 后） | 句级（TTS 出口层合成对齐） |
+| 归属 | 本机（创作链 skill） | 云端容器（`deploy/mcp-server.Dockerfile` 底座） |
+
+本地创作时走本节 node 链；壹座/试用用户（无本地环境）走 hosted `render_video`。`fd-vaas-brainstorm` 编排时按用户环境指路。
 
 ### 图文主线（「发一篇文章」）
 
@@ -170,7 +184,7 @@ VAAS/
 └── AGENTS.md                           # 给 Claude Code 的工程指引
 ```
 
-> **VAAS 根目录是一个 git 仓库**（远程：`github.com/FindDataTechnology/fd-vaas-skills`）。`remotion-app/`、`downloads/`、`demands/`、`demand.md`、`.env` 已 gitignore。`social-auto-upload` 上游被 vendor 进 `fd-vaas-publish-videos/scripts/upstream/`（不是根目录独立目录）；用 `scripts/sync-upstream.sh` 同步上游更新。
+> **VAAS 根目录是一个 git 仓库**（远程：`github.com/FindDataTechnology/fd-vaas-skills`）。`remotion-app/`、`downloads/`、`demands/`、`demand.md`、`.env`、`.mcp.json` 已 gitignore。`social-auto-upload` 上游被 vendor 进 `fd-vaas-publish-videos/scripts/upstream/`（不是根目录独立目录）；用 `.agents/skills/fd-vaas-publish-videos/scripts/sync-upstream.sh` 同步上游更新（改动只落适配层，vendor 内手改会被下次 rsync --delete 冲掉）。托管镜像单源：canonical 在 `deploy/mcp-server.Dockerfile`，根 `./Dockerfile` 由其生成（`bash scripts/gen-root-dockerfile.sh`）。
 
 ---
 
@@ -412,20 +426,24 @@ VIDEO_MODEL=doubao-seedance-2.0
 # ─── ciyuan 档（萬星·词元，router.finddatatech.cloud）──
 # 词元密钥按「分组」划能力：语音一把（组3）、图像+视频一把（组9），需两把 key。
 # 托管模式经 OpenBAO 按 kind 注入；本地模式直接配：
-#CIYUAN_API_KEY=sk-...          # 按 kind 分别注入不同分组的 key
+#CIYUAN_API_KEY=sk-...          # 按 kind 分别注入不同分组的 key（语音用 VAAS 专用账号的语音分组 key）
 #CIYUAN_BASE_URL=https://router.finddatatech.cloud
-# 实测可用模型（2026-10-16，见下「词元车道实测白名单」）
-#TTS_MODEL=qwen3-tts-flash
-#TTS_VOICE=Cherry
+# 实测可用模型（2026-11-06，见下「词元车道实测白名单」）
+#TTS_PROVIDER=ciyuan            # 语音切词元档
+#TTS_MODEL=tencent-tts          # 腾讯云语音（audio 车道按 protocol 路由，模型名任意）
+#TTS_VOICE=101001               # 腾讯音色 id；qwen3 档用 Cherry
 #IMAGE_MODEL=gemini-3-pro-image
 #VIDEO_MODEL=doubao-seedance-2-0-fast-260128
 ```
 
-### 词元车道实测白名单（2026-10-16）
+### 词元车道实测白名单（2026-11-06 更新）
 
 `/v1/models` 列出的是「可识别」不是「可服务」——换模型前先实调。实测（VAAS 专用账号）：
 
-- **TTS**：`qwen3-tts-flash` + voice `Cherry` ✅；`tts-1` 502、`gpt-4o-mini-audio-preview`/`speech-1.6` 503。
+- **TTS（2026-11-06）**：`tencent-tts` + voice `101001` ✅（腾讯云语音，audio 车道按 protocol 路由、
+  **模型名任意且不进 `/v1/models` 目录**；⚠️ 单次请求长度墙 ~170 字——165 通 / 170 挂，超限 502 且触发
+  上游熔断摘除约 5 分钟；VAAS 出口层已按 ≤150 字分段合成 + 段级实测时长对齐 captions）。
+  `qwen3-tts-flash` + voice `Cherry` ✅（2026-10-16）；`tts-1` 502、`gpt-4o-mini-audio-preview`/`speech-1.6` 503。
 - **图像**：`gemini-3-pro-image` ✅（合规 b64_json）。⚠️ `gpt-image-*` 返回 HTTP 200 但 body 是 HTML（上游缺陷，客户端会显式报错拒绝）；`doubao-seedream-*`/`flux-*`/`imagen-4` 400。
 - **视频**：`doubao-seedance-2-0-fast-260128` ✅。⚠️ `doubao-seedance-1-0-pro`/`seedance-2-5` 503、`veo3.1`/`sora-2`/`kling-*` 404（目录挂名不可路由）。
 - **ASR**：词元侧上游账号未配置（503），暂不可用；端点协议已就绪，词元配好后即用。
@@ -443,7 +461,7 @@ pip install -r scripts/requirements.txt   # 只剩 python-dotenv，三车道全�
 # 或：cd scripts && pip install -e .
 ```
 
-> ⚠️ **字幕注意**：只有 volcengine TTS 直连才带官方逐字时间戳（`captions.json`）。TTS 切到 ciyuan 档后字幕功能不可用。如需字幕，TTS 保留 volcengine（图像/视频可独立切 ciyuan——三档各自独立配置）。
+> **字幕口径（2026-11-06 起）**：volcengine 直连带官方逐字时间戳（`captions_source: official`）；词元 ciyuan 档由 TTS 出口层**合成字幕兜底**（>170 字自动分段、段级实测时长对齐，`captions_source: synthetic`）——两条腿都保证 `captions.json` 落盘，管线零感知。来源随 task.json 审计。（图像/视频可独立切 ciyuan——三档各自独立配置。）
 
 ---
 
@@ -465,7 +483,7 @@ pip install -r scripts/requirements.txt   # 只剩 python-dotenv，三车道全�
 
 > **第一排查手段：** `node scripts/doctor.mjs` —— 逐项检查 Node/ffmpeg/密钥/remotion 依赖/技能链接，给出修复命令。
 
-- **分发栈 = vendor 上游 + 薄适配层**：`social-auto-upload` 上游 vendored 在 `fd-vaas-publish-videos/scripts/upstream/`（不是根目录独立目录，别再去找根目录的 `social-auto-upload/`）。同步上游更新用 `scripts/sync-upstream.sh`。改平台选择器状态要回写 `_shared/publish/platform-registry.json`（用 `probe.py`），别手改文档。
+- **分发栈 = vendor 上游 + 薄适配层**：`social-auto-upload` 上游 vendored 在 `fd-vaas-publish-videos/scripts/upstream/`（不是根目录独立目录，别再去找根目录的 `social-auto-upload/`）。同步上游更新用 `.agents/skills/fd-vaas-publish-videos/scripts/sync-upstream.sh`。改平台选择器状态要回写 `_shared/publish/platform-registry.json`（用 `probe.py`），别手改文档。
 - **cookie 过期要重扫**：发布报登录失败多半是 cookie 过期，用 `/fd-vaas-login` 重扫即可，不用手改 cookie 文件。
 - **patchright 全平台一致**：视频发布不再按 OS 派发，macOS 也要装 patchright。ego-browser 只剩录屏 + 图文自有平台两条用途。
 - **独立的 `voice/image/video-generator` 技能已不存在**--生成器合并进了 `fd-vaas-video-creator/scripts/generators/`。后端切换（volcengine|ciyuan）仍由根目录 `scripts/litellm-bridge.py` 提供。

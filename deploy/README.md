@@ -42,41 +42,59 @@ secret/vaas/service/default/<kind>         # 服务默认凭证（同上形状�
 secret/vaas/service/default/download-hmac  # 下载签名密钥 {value}
 ```
 
-### ciyuan 档记录示例（萬星·词元，2026-10-16 实测可用模型）
+### ciyuan 档记录示例（萬星·词元，2026-11-05 复核）
 
 ```jsonc
-// secret/vaas/pool/wanxing/tts —— 组3 key（chat+三车道分组，用于语音）
-{"api_key": "sk-...", "base_url": "https://router.finddatatech.cloud",
- "model": "qwen3-tts-flash", "voice": "Cherry", "provider": "ciyuan"}
+// secret/vaas/pool/wanxing/tts —— 组3 core（豆包/腾讯云语音，健康）
+{"api_key": "sk-...", "base_url": "<CIYUAN_GATEWAY_BASE>",
+ "model": "qwen3-tts-flash", "voice": "101001", "provider": "ciyuan"}
 
-// secret/vaas/pool/wanxing/image —— 组9 key（图像+视频分组）
-{"api_key": "sk-...", "base_url": "https://router.finddatatech.cloud",
+// secret/vaas/pool/wanxing/image —— 组9 image-video（上游账号由运维侧台账管理）
+{"api_key": "sk-...", "base_url": "<CIYUAN_GATEWAY_BASE>",
  "model": "gemini-3-pro-image", "provider": "ciyuan"}
 
-// secret/vaas/pool/wanxing/video —— 组9 key
-{"api_key": "sk-...", "base_url": "https://router.finddatatech.cloud",
+// secret/vaas/pool/wanxing/video —— 组9（同一把 key）
+{"api_key": "sk-...", "base_url": "<CIYUAN_GATEWAY_BASE>",
  "model": "doubao-seedance-2-0-fast-260128", "provider": "ciyuan"}
 ```
 
-> ⚠️ 词元密钥按「分组」锁能力：**语音一把（组3）、图像+视频一把（组9）**，
-> 一把通吃做不到。配错分组会得到「模型不可路由」类错误，不是密钥错误。
-> 已知缺陷（2026-10-16 实测）：图像 `gpt-image-*` 返回 200 但 body 是 HTML
-> （客户端显式拒绝）；`doubao-seedance-1-0-pro`/`seedance-2-5` 上游 503；
-> ASR 上游账号未配置暂不可用。换模型前先实调。
+> ⚠️ 词元密钥按「分组」锁能力：**语音一把（组3 core）、图像+视频一把（组9 image-video）**，一把通吃做不到。配错分组得到「模型不可路由」类错误，不是密钥错误。
+> **voice 字段是数字音色 ID（如 101001），不是 "Cherry"**——ciyuan 车道音色以 `models_voices` 工具为准（`_ciyuan_tts.py` 有硬校验，错误音色直接拒，不让上游静默回落）。旧文档/示例里的 "Cherry" 是过时口径。
+> **2026-11-05/11-06 实测**：voice 腿（qwen3-tts-flash + 数字音色）200 出 MP3 全链通；**image/video 腿不可用**——组9 唯一上游账号被上游站点级封禁（先 `403 site owner blocked`，11-06 起演变为「HTTP 200 + 站点页面 + 正常计费但零产物」的软封锁形态），router 侧无健康图像/视频账号可调度。这是**上游账号问题，非 router key 问题**（凭证链已实证解析到 driver，key 本体可用）；解法=在上游控制台恢复或替换该账号（账号坐标与状态归运维侧台账 `docs/debt-ledger.md` DEBT-LANE-9-01）。
+> 换模型前先实调——`/v1/models` 列的是「可识别」不是「可服务」。
 
 ## OpenBAO 运维（以 registry 栈所在节点为例）
 
 - **生产模式**（2026-10-06 起）：file backend + `./openbao/data` 卷，**重启后 SEALED**。
 - **解封配方**（root-only 文件含 unseal key 与 root token；栈 `.env` 的 OPENBAO_TOKEN
   必须同步为当前 root token）：
-  `python3 -c "import json,urllib.request; init=json.load(open('/root/openbao-init-20261006.json')); urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8200/v1/sys/unseal', method='PUT', data=json.dumps({'key': init['unseal_keys_b64'][0]}).encode()))"`
+  `python3 -c "import json,urllib.request; init=json.load(open('/root/<OPENBAO_INIT_FILE>')); urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8200/v1/sys/unseal', method='PUT', data=json.dumps({'key': init['unseal_keys_b64'][0]}).encode()))"`
 - **VAAS policy token**：`vaas-policy`（仅 `secret/data/vaas/*`），10 年期 orphan
-  token；部署密钥在部署节点 `/root/vaas-deploy-secrets.txt`（600）。
+  token；部署密钥在部署节点 `/root/<VAAS_DEPLOY_SECRETS_FILE>`（600）。
 - 迁移回滚件：`/root/openbao-snapshot-20261006.json`（dev→file 当日全量导出，回填校验
   3/3 哈希一致）。
 - 两个 compose 都改过：`docker-compose.yml` 与 **权威的 `docker-compose.prebuilt.yml`**
   （容器由它创建；重建用 `docker compose -f docker-compose.prebuilt.yml up -d
   --no-deps --force-recreate --no-build <svc>`，不要走默认 yml——它会尝试本地 build）。
+
+## 存活与恢复（runbook）
+
+- **健康探针**：容器 `/health`（`main.py` custom_route）+ compose `healthcheck`（示例见
+  `docker-compose.vaas.example.yml`）。存活态可 `docker inspect -f '{{.State.Health.Status}}' vaas-wanxing`。
+- **unhealthy 自愈**：compose 的 healthcheck 不自动重启，部署侧用 `deploy/health-watch.sh` 兜底
+  （连续 unhealthy 达阈值即 `docker restart`，默认阈值 2 次、容器名 `vaas-wanxing`，env 可调）。
+  挂 root crontab：`*/5 * * * * bash <DEPLOY_DIR>/health-watch.sh >> /var/log/vaas-health-watch.log 2>&1`。
+- **进程级自愈**：`restart: unless-stopped` 覆盖崩溃/OOM；单容器单节点是已知单点（见下）。
+- **密钥库重启后 SEALED**：VAAS 起来但取不到凭证 → `credential_unavailable`。先按上方「OpenBAO 运维」
+  解封配方 unseal，再 `docker restart vaas-wanxing`（policy token TTL 缓存会自然失效）。
+  root key 文件路径与 OPENBAO_TOKEN 同步口径见上节；本仓不落真值。
+- **单点风险与备份责任**：实例是单容器单节点。数据面 = `vaas-data`(DB) + `vaas-downloads`(产物) 两个
+  named volume，宿主 docker 卷目录，**备份归部署节点运维**（本仓不提供生产坐标、不代管数据）。
+  重节点/迁移前 `docker compose ... down` 前先备份两卷；节点重启后确认容器已 `running` 且 `/health` 绿。
+- **外依赖债务**：车道封禁/CI 停摆/真机复验等跨仓未销账项，统一登记在
+  [`docs/debt-ledger.md`](../docs/debt-ledger.md)。
+- **验证一次自愈生效**（上线后做一次，留时间线）：`docker kill` 主进程 → 观察 restart 策略拉起 →
+  `/health` 回绿；人为使 healthcheck 失败（如临时错 port）→ 观察 health-watch.sh 到阈值重启。
 
 ## 謙面注册（`/vaas-wanxing` 先行）
 
@@ -94,3 +112,53 @@ secret/vaas/service/default/download-hmac  # 下载签名密钥 {value}
 - 在役 ARK key 为 **Agent Plan 专用**（视频/对话），不支持 seedream 图片模型
   （/api/plan/v3 404 UnsupportedModel；/api/v3 401）。图片生成要等一枚开了
   seedream 权限的**标准 Ark key** 入 vault（顺带完成旧 key 轮换）。
+
+## 渲染面（Render Plane，W4 起）
+
+视频渲染已从 API 面剥离为**独立、无状态、可多实例**的服务（HyperFrames 0.9.26）。
+API 面只编译 composition 并提交作业；渲染面只做 composition → MP4。API 镜像
+**保持无 Node**（ADR-0004 增补）。
+
+### 接口
+
+| 端点 | 说明 |
+|---|---|
+| `GET /healthz` | 引擎版本 / Chrome / workers / 队列 / doctor 摘要 |
+| `GET /v1/version` | 引擎版本（API 面钉版校验） |
+| `PUT /v1/assets/<sha256>` | 素材内容寻址入库 |
+| `POST /v1/render` | `{job_id, fps, quality, format, composition:{html, assets}}` → 成片字节流 |
+
+成功响应头：`X-Engine`、`X-Render-Ms`、`X-Warnings`。失败：`4xx`（composition 不合规，不重试）/`429`（队列满）/`5xx`（可换实例重试）。
+
+### 部署（示例：`render-plane/` 目录）
+
+```bash
+cd render-plane
+docker build -t vaas-render-plane:0.1.0 .
+docker network create --internal vaas-render-net     # 无外网出口
+docker run -d --name vaas-renderer --network vaas-render-net \
+  --shm-size=512m --memory=3g vaas-render-plane:0.1.0
+```
+
+API 面接入（`/opt/vaas-deploy/docker-compose.vaas.yml`）：
+
+```yaml
+services:
+  vaas-wanxing:
+    environment:
+      VAAS_RENDER_URL: "http://vaas-renderer:8099"     # 多实例：VAAS_RENDER_URLS="http://a:8099,http://b:8099"
+    networks: [default, vaas-render-net]
+
+networks:
+  vaas-render-net:
+    external: true
+```
+
+### 容量与运维
+
+- 每 worker 一个 Chrome ≈256MB；`/dev/shm` ≥512m；3.8G 内存机用 `VAAS_RENDER_MAX_CONCURRENCY=1`
+- 重试/多实例：`VAAS_RENDER_RETRIES`（默认 2）、`VAAS_RENDER_RETRY_BACKOFF_S`（默认 0.5）；
+  不可达 / 429 / 5xx 会换实例重试，400/413 立即失败（composition 问题，重试无意义）
+- 隔离：渲染面容器只接 internal 网络（无出网）；作业 env 白名单，不含任何平台密钥
+- 引擎升级：先跑双跑确定性门禁（`hyperframes@<ver>` 变更会改变计划键，旧重放自动失效）
+- 回滚：镜像/渲染面 tag 级

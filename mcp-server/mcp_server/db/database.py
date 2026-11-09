@@ -26,8 +26,14 @@ def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
         sqlite3.Connection with row_factory=sqlite3.Row
     """
     path = db_path or DB_PATH
-    conn = sqlite3.connect(str(path))
+    # isolation_level=None → autocommit: 并行工具调用下写入不再隐式占锁，
+    # 显式 BEGIN 才开事务（W2 修复，见 attic db_database.py）。
+    conn = sqlite3.connect(str(path), timeout=10.0, isolation_level=None)
     conn.row_factory = sqlite3.Row
+    # WAL + generous busy_timeout so concurrent generation calls queue instead
+    # of aborting with "database is locked" (hit under parallel tools/call).
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 8000")
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -208,8 +214,10 @@ def init_schema(db_path: Optional[Path] = None) -> None:
             provider TEXT NOT NULL,
             model TEXT,
             units REAL NOT NULL DEFAULT 1,
-            unit_type TEXT NOT NULL,           -- image|char|second|render
-            credential_source TEXT NOT NULL,   -- pool|default|env
+            unit_type TEXT NOT NULL,           -- image|char|second|render|doc
+            credential_source TEXT NOT NULL,   -- pool|default|env|local
+                                               -- (local = deterministic render plane,
+                                               --  runs on local compute, no external credential)
             asset_id TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
