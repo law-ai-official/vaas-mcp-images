@@ -1,6 +1,6 @@
 {
-  "baseRef": "origin/main",
-  "baseCommit": "5efa48f8b8a2db5e6cf64036062762811fcdc9ef",
+  "baseRef": "main",
+  "baseCommit": "08e16ae564361fd6a918b2e9e1e6753d7d987918",
   "snapshotCommit": "filled in by the publish repo's own commit",
-  "builtAt": "2026-11-09T16:52:29.720Z"
+  "builtAt": "2026-11-09T17:09:45.735Z"
 }
