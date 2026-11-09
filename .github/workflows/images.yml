@@ -3,6 +3,12 @@ name: images
 on:
   push:
     branches: [master, main]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "vaas-mcp | vaas-render-plane | both"
+        required: false
+        default: vaas-render-plane
 
 env:
   REGISTRY: hkccr.ccs.tencentyun.com
@@ -10,6 +16,8 @@ env:
 
 jobs:
   build-push:
+    # dispatch 默认只建渲染面；要重建 API 镜像显式传 target=vaas-mcp|both
+    if: github.event_name == 'push' || inputs.target == 'vaas-mcp' || inputs.target == 'both'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -40,3 +48,66 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/vaas-mcp:main
           cache-from: type=gha,scope=vaas-mcp
           cache-to: type=gha,scope=vaas-mcp,mode=max
+
+  build-push-render-plane:
+    # 渲染面镜像（adopt-hyperframes-video-renderer）：独立无状态平面，context=render-plane
+    if: github.event_name == 'workflow_dispatch' && (inputs.target == 'vaas-render-plane' || inputs.target == 'both')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute tag
+        id: tag
+        run: echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.TCR_USERNAME }}
+          password: ${{ secrets.TCR_PASSWORD }}
+
+      # 先 load 不 push：起容器验 /healthz，过了才允许镜像进仓库（池/平台同款纪律）
+      - name: Build image (load, no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: render-plane
+          file: render-plane/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          provenance: false
+          tags: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/vaas-render-plane:${{ steps.tag.outputs.tag }}
+          cache-from: type=gha,scope=vaas-render-plane
+          cache-to: type=gha,scope=vaas-render-plane,mode=max
+
+      - name: Smoke gate (/healthz)
+        run: |
+          set -e
+          TAG="${{ steps.tag.outputs.tag }}"
+          IMG="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/vaas-render-plane:$TAG"
+          docker rm -f rp-smoke >/dev/null 2>&1 || true
+          docker run -d --name rp-smoke --shm-size=512m "$IMG" >/dev/null
+          ok=0
+          for i in $(seq 1 30); do
+            sleep 3
+            if docker exec rp-smoke node -e 'fetch("http://127.0.0.1:8099/healthz").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))' 2>/dev/null; then
+              ok=1; break
+            fi
+          done
+          docker logs rp-smoke 2>&1 | tail -20 || true
+          docker rm -f rp-smoke >/dev/null 2>&1 || true
+          [ "$ok" = "1" ] || { echo "::error::render plane failed to serve /healthz"; exit 1; }
+
+      - name: Push
+        run: |
+          set -e
+          TAG="${{ steps.tag.outputs.tag }}"
+          IMG="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/vaas-render-plane"
+          docker tag "$IMG:$TAG" "$IMG:main"
+          docker push "$IMG:$TAG"
+          docker push "$IMG:main"
