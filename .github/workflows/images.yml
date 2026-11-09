@@ -16,8 +16,9 @@ env:
 
 jobs:
   build-push:
-    # dispatch 默认只建渲染面；要重建 API 镜像显式传 target=vaas-mcp|both
-    if: github.event_name == 'push' || inputs.target == 'vaas-mcp' || inputs.target == 'both'
+    # 只走 dispatch：推快照本身不构建（专属仓额度 117/2000，推快照白建一次 API 镜像是纯浪费）。
+    # 要重建 API 镜像：gh workflow run images.yml -f target=vaas-mcp
+    if: github.event_name == 'workflow_dispatch' && (inputs.target == 'vaas-mcp' || inputs.target == 'both')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
