@@ -33,20 +33,40 @@ from socketserver import ThreadingMixIn
 from urllib.parse import parse_qs, urlparse
 
 # W5.2 平台感知 Python 启动器:Windows 无 python3 字面量(只有 py/python),
-# 六处 spawn 统一走 PY,不再硬编码。与 _shared/publish/publish-common.mjs
-# resolvePython 同优先级(python3 → py → python)。
-PY = shutil.which("python3") or shutil.which("py") or shutil.which("python") or "python3"
+# 六处 spawn 统一走 PY,不再硬编码。
+#
+# 解析优先级：VAAS_PYTHON > 仓内 .venv > PATH 上的 python3/py/python
+# （与 scripts/ci-local.sh 的 resolve_python 同口径）。
+#
+# 为什么不能只信 PATH：Homebrew 换 major 后系统 python 的第三方依赖会整片消失，
+# 「扫码登录」spawn 出来的子进程立刻死于 ModuleNotFoundError: No module named
+# 'playwright'——浏览器不弹、二维码永远不出现；而服务端 stdout 被 block-buffering
+# 吞成空文件，现场看起来就是「点了没反应」（2026-11-10 实证：服务跑在
+# /opt/homebrew/.../python@3.14，只有仓内 .venv 装了 patchright/cv2/segno）。
+def _resolve_python() -> str:
+    env_py = os.environ.get("VAAS_PYTHON")
+    if env_py and Path(env_py).exists():
+        return env_py
+    for cand in (
+        _ROOT / ".venv" / "bin" / "python",
+        _ROOT / ".venv" / "Scripts" / "python.exe",
+    ):
+        if cand.exists():
+            return str(cand)
+    return shutil.which("python3") or shutil.which("py") or shutil.which("python") or "python3"
 
 
 # ─── 配置 ────────────────────────────────────────────────────────
 PORT = 8766
 _HERE = Path(__file__).resolve().parent
 _ROOT = _HERE.parent.parent.parent.parent  # scripts/ -> fd-vaas-login/ -> skills/ -> .agents/ -> VAAS/
+PY = _resolve_python()  # 必须在 _ROOT 之后：解析要拿 <reporoot>/.venv
 _SAU_ADAPTER = _HERE.parent.parent / "fd-vaas-publish-videos" / "scripts" / "platforms" / "sau_adapter.py"
 _BILIBILI_LOGIN = _HERE / "bilibili_login.py"
 _YOUTUBE_LOGIN = _HERE / "youtube_login.py"
 _DOCS_LOGIN = _HERE / "docs_login.py"
 _DOCS_STATE_FILE = _HERE / ".docs_state.json"  # 图文平台检测结果落盘（gitignored）
+_LOGIN_STATE_FILE = _HERE / ".login_state.json"  # 视频平台验真结果落盘（gitignored）
 
 
 # ─── 平台注册表（对齐 sau_adapter.py REGISTRY）────────────────────────────────
@@ -157,6 +177,42 @@ def _save_docs_state():
         print(f"⚠️ docs state 保存失败: {e}")
 
 
+# 视频平台「验真」结果（落盘，重启不丢）：platform → {"valid": bool|None, "message": str, "checked_at": str}
+# 为什么必须落盘：cookie 文件在 ≠ cookie 有效。2026-11-10 实测同样 23.8 天的四份
+# cookie，douyin/xiaohongshu 有效、kuaishou/weixin 已死；只按文件存在渲染「已登录」
+# 会让用户直到发布当天才发现掉线。验真结果必须有时间戳地留在面板上。
+_login_check: dict = {}
+
+
+def _load_login_state():
+    global _login_check
+    try:
+        if _LOGIN_STATE_FILE.exists():
+            _login_check = json.loads(_LOGIN_STATE_FILE.read_text("utf-8"))
+    except Exception:
+        _login_check = {}
+
+
+def _save_login_state():
+    try:
+        _LOGIN_STATE_FILE.write_text(
+            json.dumps(_login_check, ensure_ascii=False, indent=1), "utf-8"
+        )
+    except Exception as e:
+        print(f"⚠️ login state 保存失败: {e}")
+
+
+def _record_login_check(platform: str, valid, message: str):
+    with _lock:
+        _login_check[platform] = {
+            "valid": valid,
+            "message": message,
+            "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        }
+        _save_login_state()
+
+
+
 def _find_latest_qr(platform: str) -> Path | None:
     """查找平台最新且**未过期**的 *_login_qrcode_*.png 文件。
 
@@ -205,7 +261,7 @@ def _has_stale_qr(platform: str) -> bool:
 def _run_login(platform: str) -> int:
     """后台运行 sau_adapter.py --login。返回 exit code。"""
     cfg = PLATFORM_REGISTRY[platform]
-    cmd = [PY, str(_SAU_ADAPTER), "--platform", platform, "--login"]
+    cmd = [PY, "-u", str(_SAU_ADAPTER), "--platform", platform, "--login"]
 
     # YouTube 需要代理环境变量
     if platform == "youtube":
@@ -272,7 +328,7 @@ def _run_bilibili_login() -> int:
     """后台运行 bilibili_login.py 打开浏览器供用户手动登录（profile 持久化模式）。"""
     cfg = PLATFORM_REGISTRY["bilibili"]
     profile_dir = cfg["profile_dir"]
-    cmd = [PY, str(_BILIBILI_LOGIN), str(profile_dir)]
+    cmd = [PY, "-u", str(_BILIBILI_LOGIN), str(profile_dir)]
 
     print("▶ 启动 bilibili 登录流程...")
     with _lock:
@@ -328,7 +384,7 @@ def _run_youtube_login() -> int:
     """
     cfg = PLATFORM_REGISTRY["youtube"]
     account_file = cfg["account_file"]
-    cmd = [PY, str(_YOUTUBE_LOGIN), str(account_file)]
+    cmd = [PY, "-u", str(_YOUTUBE_LOGIN), str(account_file)]
 
     # youtube.com 需要代理（patchright 启的 chromium 不吃系统代理）。
     # 用 channel="chrome" 走真 Chrome 时，Chrome 自身读系统代理；这里设 env 保险。
@@ -396,7 +452,7 @@ def _run_login_check(platform: str) -> tuple[bool | None, str]:
     if not account_file or not account_file.exists():
         return False, "cookie 不存在"
 
-    cmd = [PY, str(_SAU_ADAPTER), "--platform", platform, "--login-check"]
+    cmd = [PY, "-u", str(_SAU_ADAPTER), "--platform", platform, "--login-check"]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, cwd=str(_ROOT))
     output = result.stdout + result.stderr
 
@@ -411,7 +467,7 @@ def _run_login_check(platform: str) -> tuple[bool | None, str]:
 def _run_docs_action(platform: str, mode: str) -> int:
     """后台跑 docs_login.py --check/--login，结束后把检测结果落盘。"""
     key = f"docs:{platform}"
-    cmd = [PY, str(_DOCS_LOGIN), platform, f"--{mode}"]
+    cmd = [PY, "-u", str(_DOCS_LOGIN), platform, f"--{mode}"]
 
     print(f"▶ 图文[{platform}] {mode} ...")
     with _lock:
@@ -587,6 +643,7 @@ def _get_platform_status(platform: str) -> dict:
         "cookie_age_days": cookie_age_days,
         "cookie_expired": cookie_expired,
         "login_state": login_state,
+        "check": _login_check.get(platform),  # 最近一次验真结果（含时间戳），None=从未验过
         "qr_available": qr_available,
         "qr_expired": qr_expired,
         "qr_path": str(qr_path) if qr_path else None,
@@ -712,21 +769,23 @@ class LoginHandler(BaseHTTPRequestHandler):
                 # bilibili: 跑 bilibili_login.py --check 检查 profile 是否就绪
                 cfg = PLATFORM_REGISTRY[platform]
                 profile_dir = cfg.get("profile_dir")
-                cmd = [PY, str(_BILIBILI_LOGIN), str(profile_dir), "--check"]
+                cmd = [PY, "-u", str(_BILIBILI_LOGIN), str(profile_dir), "--check"]
                 try:
                     result = subprocess.run(
                         cmd, capture_output=True, text=True, timeout=15, cwd=str(_ROOT)
                     )
                     out = (result.stdout + result.stderr).strip()
                     valid = result.returncode == 0
-                    self.send_json({
-                        "valid": valid,
-                        "message": out.split("\n")[-1] if out else ("profile 已就绪" if valid else "未找到 profile"),
-                    })
+                    msg = out.split("\n")[-1] if out else ("profile 已就绪" if valid else "未找到 profile")
+                    _record_login_check(platform, valid, msg)
+                    self.send_json({"valid": valid, "message": msg})
                 except Exception as e:
                     self.send_json({"valid": False, "message": f"检查失败: {e}"})
             else:
                 valid, msg = _run_login_check(platform)
+                # 「cookie 不存在」不是一次验真失败，别给它盖失效戳（会误导成「曾经有效现已失效」）
+                if msg != "cookie 不存在":
+                    _record_login_check(platform, valid, msg)
                 self.send_json({"valid": valid, "message": msg})
         elif path in ("/api/docs/login", "/api/docs/check"):
             platform = query.get("platform", [None])[0] or (body.decode("utf-8") if body else None)
@@ -1096,11 +1155,19 @@ function renderDocs(json) {{
 function render(statuses) {{
     const container = document.getElementById('platforms');
     container.innerHTML = statuses.map(s => {{
-        const isLoggedIn = s.has_cookie && s.cookie_expired !== true && s.login_state !== 'running';
+        // 验真结果优先于「文件在不在」：文件在 ≠ cookie 有效（2026-11-10 实证：
+        // 同样 23.8 天，抖音/小红书有效、快手/视频号已死）。
+        const chk = s.check || null;
+        const checkedInvalid = !!(chk && chk.valid === false);
+        const checkedValid = !!(chk && chk.valid === true);
+        const isLoggedIn = s.has_cookie && s.cookie_expired !== true && !checkedInvalid && s.login_state !== 'running';
         const statusClass = s.login_state === 'running' ? 'status-running'
                           : (isLoggedIn ? 'status-logged-in' : 'status-not-logged-in');
         const statusText = s.login_state === 'running' ? '登录中...'
-                         : (s.has_cookie && s.cookie_expired ? `登录态可能已过期（${{s.cookie_age_days}} 天前）` : (isLoggedIn ? '已登录' : '未登录'));
+                         : (checkedInvalid ? `已失效（${{chk.checked_at}} 验证）`
+                         : (s.has_cookie && s.cookie_expired ? `登录态可能已过期（${{s.cookie_age_days}} 天前）`
+                         : (checkedValid ? `已验证有效（${{chk.checked_at}}）`
+                         : (isLoggedIn ? '已登录（未验真）' : '未登录'))));
 
         let actions = '';
         if (s.platform === 'bilibili') {{
@@ -1112,7 +1179,10 @@ function render(statuses) {{
                 actions = `<button class="btn btn-primary" onclick="startLogin('${{s.platform}}')">打开浏览器登录</button><button class="btn" onclick="checkCookie('${{s.platform}}')">检查登录态</button>`;
             }}
         }} else if (isLoggedIn) {{
-            actions = `<button class="btn btn-success" onclick="checkCookie('${{s.platform}}')">验证 Cookie</button>`;
+            // 已登录也要能主动重登：cookie 临近 30 天门限时用户需要提前换码，
+            // 缺这个入口时页面只给「验证 Cookie」，用户会以为无法重新登录。
+            actions = `<button class="btn btn-success" onclick="checkCookie('${{s.platform}}')">验证 Cookie</button>`
+                    + `<button class="btn" onclick="startLogin('${{s.platform}}')">${{s.login_state === 'running' ? '等待完成...' : '重新登录'}}</button>`;
         }} else {{
             actions = `<button class="btn btn-primary" onclick="startLogin('${{s.platform}}')">${{s.login_state === 'running' ? '等待完成...' : (s.platform === 'youtube' ? '用 Chrome 登录' : '扫码登录')}}</button>`;
         }}
@@ -1148,12 +1218,23 @@ function render(statuses) {{
         if (s.login_state === 'running') {{
             hint = '<div class="hint">⏳ 登录进行中，请等待弹窗或继续操作...</div>';
         }}
+        // 临近门限（>=21 天）：还没过期但该准备重登了，提前提醒而不是等到失效才发现
+        if (isLoggedIn && s.cookie_age_days != null && s.cookie_age_days >= 21) {{
+            hint = `<div class="hint">⏳ 当前登录态已 ${{s.cookie_age_days}} 天，临近 30 天门限。
+                建议现在点「重新登录」提前换码，避免发布当天才发现失效。</div>`;
+        }}
         // 登录态过期：这是「重新获取二维码」的主场景，要明确指到重扫动作上
         if (!isLoggedIn && s.has_cookie && s.cookie_expired && s.login_state !== 'running') {{
             hint = `<div class="hint">🔄 登录态已过期（${{s.cookie_age_days}} 天前），需要重新登录。
                 <b>点下方「${{s.platform === 'youtube' ? '用 Chrome 登录' : '扫码登录'}}」</b>重新获取二维码；
                 扫码完成后 cookie 会自动更新。<br/>
                 💡 平台二维码通常几分钟内失效，看到后请尽快扫。</div>`;
+        }}
+        // 验真说死了：文件还在但平台已不认（最坑的一种，必须最显眼）
+        if (checkedInvalid && s.login_state !== 'running') {{
+            hint = `<div class="hint">⛔ ${{chk.checked_at}} 实测这个登录态已失效（${{chk.message || 'cookie 已失效'}}）。
+                cookie 文件还在，但平台已不认它——发布会被顶回登录页。
+                <b>点下方「${{s.platform === 'youtube' ? '用 Chrome 登录' : '扫码登录'}}」重扫</b>。</div>`;
         }}
 
         return `
@@ -1188,9 +1269,33 @@ setInterval(refreshStatus, 3000);
         self.send_html(html)
 
 
+def _preflight() -> None:
+    """启动即自检：解析出的子进程解释器必须能导入登录链路的依赖。
+
+    不这么做的话，缺依赖只会在用户点「扫码登录」时表现为子进程秒死，
+    页面上只留一段 traceback、二维码永远不会出现——排查成本极高。
+    """
+    print(f"   Python（登录子进程）: {PY}")
+    missing = []
+    for mod in ("playwright", "patchright", "cv2", "segno", "loguru", "numpy"):
+        r = subprocess.run([PY, "-c", f"import {mod}"], capture_output=True, text=True)
+        if r.returncode != 0:
+            missing.append(mod)
+    if missing:
+        print(f"   ⚠️ 该解释器缺依赖：{', '.join(missing)}")
+        print(f"      修复：{PY} -m pip install -r "
+              f"{_ROOT / '.agents/skills/fd-vaas-publish-videos/scripts/platforms/requirements.txt'}")
+        print(f"            {PY} -m patchright install chromium")
+        print("      或设 VAAS_PYTHON 指向已装好依赖的解释器后重启本页。\n")
+    else:
+        print("   依赖自检：playwright/patchright/cv2/segno/loguru/numpy 全部就绪\n")
+
+
 def main():
     _load_docs_state()
+    _load_login_state()
     print(f"🚀 VAAS 登录管理页已启动：http://localhost:{PORT}")
+    _preflight()
     print(f"   Ctrl+C 停止\n")
 
     try:
