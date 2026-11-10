@@ -1,6 +1,6 @@
 {
-  "baseRef": "probe/killgroup-log",
-  "baseCommit": "9bf078d8138599be2b078f8bc6e5dfa861630751",
+  "baseRef": "main",
+  "baseCommit": "0c3fb189e4ca6fbfa4f1274929f6e0f1c40b6ef4",
   "snapshotCommit": "filled in by the publish repo's own commit",
-  "builtAt": "2026-11-10T12:08:36.394Z"
+  "builtAt": "2026-11-10T16:28:37.338Z"
 }
