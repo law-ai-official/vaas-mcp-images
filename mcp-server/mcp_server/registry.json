@@ -25,6 +25,12 @@
       "provider": "ciyuan",
       "model": "${IMAGE_MODEL}",
       "driver": "generate_image"
+    },
+    {
+      "name": "seedream-grok",
+      "provider": "grok",
+      "model": "${GROK_IMAGE_MODEL}",
+      "driver": "generate_image"
     }
   ],
   "video": [
@@ -38,6 +44,12 @@
       "name": "seedance-ciyuan",
       "provider": "ciyuan",
       "model": "${VIDEO_MODEL}",
+      "driver": "generate_video"
+    },
+    {
+      "name": "seedance-grok",
+      "provider": "grok",
+      "model": "${GROK_VIDEO_MODEL}",
       "driver": "generate_video"
     }
   ],

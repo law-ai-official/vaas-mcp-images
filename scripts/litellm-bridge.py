@@ -83,15 +83,15 @@ def env_get(key: str, default: str = "") -> str:
     return default
 
 
-def _reject_provider(provider: str, kind: str) -> None:
-    """未受支持的 provider 显式拒绝：不静默回落，列出受支持的两条自有路径。
+def _reject_provider(provider: str, kind: str, supported: str = "volcengine, ciyuan") -> None:
+    """未受支持的 provider 显式拒绝：不静默回落，列出受支持的自有路径。
 
     （历史上此处走 litellm 兜底任意第三方 provider；词元已是自有网关，
     litellm 已退役——见 openspec change vaas-ciyuan-lane-providers。）
     """
     raise SystemExit(
         f"Error: {kind} provider '{provider}' is not supported. "
-        "Supported providers: volcengine, ciyuan."
+        f"Supported providers: {supported}."
     )
 
 
@@ -224,8 +224,28 @@ def cmd_image(args: argparse.Namespace) -> int:
             base_url=args.base_url or env_get("CIYUAN_BASE_URL") or "",
         )
         result["model"] = model
+    elif provider == "grok":
+        # 萬星·词元 grok 车道（组 19）：图像端点形状与 ciyuan 档完全相同
+        # （POST /v1/images/generations，b64_json 落盘），只是钥匙走组 19。
+        # 委托同一驱动，凭据优先 GROK_*（缺省回落 CIYUAN_*——同一个网关）。
+        from _ciyuan_image import generate as ciyuan_img  # type: ignore
+
+        model = args.model or env_get("GROK_IMAGE_MODEL", "") or "grok-imagine-image"
+        n = args.n or 1
+        out_paths = [out_path.with_name(f"{out_path.stem}_{i:02d}{out_path.suffix}") for i in range(n)]
+        result = ciyuan_img(
+            prompt=args.prompt,
+            model=model,
+            size=args.size,
+            n=n,
+            output_paths=out_paths,
+            api_key=args.api_key or env_get("GROK_API_KEY") or env_get("CIYUAN_API_KEY") or "",
+            base_url=args.base_url or env_get("GROK_BASE_URL") or env_get("CIYUAN_BASE_URL") or "",
+        )
+        result["model"] = model
+        result["provider"] = "grok"
     else:
-        _reject_provider(provider, "image")
+        _reject_provider(provider, "image", supported="volcengine, ciyuan, grok")
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
@@ -369,11 +389,96 @@ def cmd_video(args: argparse.Namespace) -> int:
                 "usage": final.get("usage"),
                 "api_latency_ms": round((time.time() - start) * 1000),
             }
+    elif provider == "grok":
+        # 萬星·词元 grok 车道：/v1/videos 协议族（与 ciyuan 档的
+        # /v1/contents/generations/tasks 形状不同），见 _grok_video.py。
+        # 两阶段防重复计费语义与 ciyuan 档一致：--async 只提交、--status 只查态。
+        from _grok_video import download as grok_download  # type: ignore
+        from _grok_video import poll as grok_poll  # type: ignore
+        from _grok_video import status_once as grok_status_once  # type: ignore
+        from _grok_video import submit as grok_submit  # type: ignore
+
+        if not args.model:
+            model = env_get("GROK_VIDEO_MODEL", "") or "grok-imagine-video"
+        api_key = args.api_key or env_get("GROK_API_KEY") or env_get("CIYUAN_API_KEY") or ""
+        base_url = args.base_url or env_get("GROK_BASE_URL") or env_get("CIYUAN_BASE_URL") or ""
+
+        if args.status_task_id:
+            final = grok_status_once(
+                task_id=args.status_task_id,
+                api_key=api_key,
+                base_url=base_url,
+            )
+            result = {
+                "ok": final.get("status") == "succeeded",
+                "provider": "grok",
+                "task_id": args.status_task_id,
+                "status": final.get("status"),
+                "upstream_status": final.get("upstream_status"),
+                "model": final.get("model"),
+                "video_url": final.get("video_url"),
+            }
+            if result["ok"] and out_path != Path(""):
+                if not result.get("video_url"):
+                    print("Error: task succeeded but no video url in response", file=sys.stderr)
+                    return 3
+                result.update(grok_download(
+                    video_url=result["video_url"], output_path=out_path,
+                    api_key=api_key, base_url=base_url,
+                ))
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+
+        if not args.prompt:
+            print("Error: --prompt is required", file=sys.stderr)
+            return 2
+        sub = grok_submit(
+            prompt=args.prompt,
+            model=model,
+            duration=args.duration,
+            ratio=args.ratio,
+            resolution=args.resolution,
+            first_frame=args.first_frame,
+            last_frame=args.last_frame,
+            api_key=api_key,
+            base_url=base_url,
+        )
+        if args.async_mode:
+            result = {
+                "ok": True, "provider": "grok", "submitted": True,
+                **sub, "api_latency_ms": round((time.time() - start) * 1000),
+            }
+        else:
+            final = grok_poll(
+                task_id=sub["task_id"], api_key=api_key, base_url=base_url,
+                timeout_seconds=args.timeout or 600, interval_seconds=10,
+            )
+            if final.get("status") != "succeeded":
+                print(
+                    json.dumps({"ok": False, "provider": "grok", **sub,
+                                "status": final.get("status"), "detail": final}, ensure_ascii=False)[:1500],
+                    file=sys.stderr,
+                )
+                return 3
+            video_url = final.get("video_url")
+            if not video_url:
+                print("Error: task succeeded but no video url in response", file=sys.stderr)
+                return 3
+            result = {
+                "ok": True, "provider": "grok", "model": final.get("model") or model,
+                "task_id": sub["task_id"], "status": "succeeded",
+                **grok_download(video_url=video_url, output_path=out_path,
+                                api_key=api_key, base_url=base_url),
+                "seconds": final.get("seconds"),
+                "resolution": final.get("resolution"),
+                "warnings": sub.get("warnings") or [],
+                "api_latency_ms": round((time.time() - start) * 1000),
+            }
     else:
-        # 未受支持的 provider：显式拒绝，不静默回落（两条自有路径：volcengine/ciyuan）。
+        # 未受支持的 provider：显式拒绝，不静默回落（三条自有路径：volcengine/ciyuan/grok）。
         print(
             f"Error: video generation for provider '{provider}' is not supported. "
-            "Supported providers: volcengine, ciyuan.",
+            "Supported providers: volcengine, ciyuan, grok.",
             file=sys.stderr,
         )
         return 3

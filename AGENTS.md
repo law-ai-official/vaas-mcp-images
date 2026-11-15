@@ -247,6 +247,26 @@ See `mcp-server/README.md` for full documentation.
 - **Lane health is machine-readable**: `registry_list_generators` / `models_voices` carry a
   `lane` block and a down lane refuses with `lane_down (<kind>/<provider>): … (reason_class)`
   — read it before retrying; ledger lives in `mcp-server/mcp_server/lane_health.json`.
+  Each entry also reports `age_days` / `stale` (7-day budget by default, per-entry
+  `stale_after_days`; `null` = date missing/unparseable, which is NOT fresh). A stale verdict
+  cuts both ways: a stale `down` keeps refusing a lane that may have recovered, a stale
+  `active` advertises a lane that may have died — so re-verify rather than trust the age.
+- **Reverify a lane with `scripts/probe_image_lane.py`** (not by hand). A `down` verdict blocks
+  the upstream call, so `last_verified` never advances on its own — nothing re-checks it unless
+  a human does. The probe reuses the real driver and answers in three states:
+  `restored` (exit 0; real image bytes persisted) / `still-blocked` (exit 1; `html_or_nonjson`
+  = soft block, or `http_5xx` = fail-closed upstream) / `cannot-judge` (exit 2;
+  `credential_rejected`, `bad_request`, `network`). **4xx is never "still blocked"** — it means
+  our key or model is wrong, and reporting it as a ban sends people to the wrong upstream.
+  Key comes from an env var only (`--api-key-env`, default `CIYUAN_API_KEY`); never on argv.
+  ```bash
+  CIYUAN_API_KEY=… python3 scripts/probe_image_lane.py \
+      --base https://router.finddatatech.cloud --model grok-imagine-image --json
+  ```
+  Debt-ledger entries flip only on `restored`; `still-blocked` updates `last_verified` and
+  nothing else. Also: both product shapes (`b64_json` / `url`) are magic-checked, and the
+  artifact extension follows the real container — a jpeg request served as PNG lands as `.png`
+  with a `warnings` entry, never as a `.jpeg` holding PNG bytes.
 - **Network / proxy** (this environment): local HTTP proxy `127.0.0.1:7892` (fallback `7890`) - set
   `http_proxy` (NOT `https_proxy`) for general use. Some hosts (`officecli.ai`,
   `raw.githubusercontent.com`) fail TLS through the proxy - bypass with `env -u http_proxy -u https_proxy <cmd>`.

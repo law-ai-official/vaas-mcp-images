@@ -2,8 +2,13 @@
 萬星·词元 (Ciyuan) image helper for litellm-bridge.
 
 Calls the ciyuan lane `POST /v1/images/generations` (OpenAI images shape),
-decodes data[].b64_json and writes the bytes to disk. Result dict mirrors the
-volcengine path: {ok, provider, model, images:[{local_path, file_size_bytes}], ...}
+decodes data[].b64_json (or downloads data[].url when that is all the upstream
+returns) and writes the bytes to disk. Result dict mirrors the volcengine path:
+{ok, provider, model, images:[{local_path, file_size_bytes}], ...}
+
+产物形态（add-image-lane-fallback）：`b64_json` 优先，缺失时才取 `url`。url 形态是
+新增的网络面，自带安全包封（scheme 白名单 / 超时 / 体积上限 / Content-Type + 魔数双校验），
+失败信息只带主机名不带查询串（签名 URL 的凭据常在 query 里）。
 
 实测白名单（2026-10-16，VAAS 专用账号 user94 真调）：
   可用: gemini-3-pro-image → 200 合规 JSON，data[].b64_json 解码得真 JPEG
@@ -19,9 +24,123 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+
+# url-form产物 downloads: envelope (see design D2). Both knobs are env-overridable
+# so an operator can widen them without a code change.
+MAX_URL_BYTES = int(os.environ.get("CIYUAN_IMAGE_MAX_URL_BYTES") or 24 * 1024 * 1024)
+URL_TIMEOUT_S = float(os.environ.get("CIYUAN_IMAGE_URL_TIMEOUT_S") or 60)
+
+# Magic numbers, not just Content-Type: an upstream can label HTML as image/jpeg.
+_IMAGE_MAGIC = (
+    (b"\xff\xd8\xff", "jpeg"),
+    (b"\x89PNG\r\n\x1a\n", "png"),
+    (b"GIF87a", "gif"),
+    (b"GIF89a", "gif"),
+    (b"BM", "bmp"),
+    (b"II*\x00", "tiff"),
+    (b"MM\x00*", "tiff"),
+)
+
+
+def _detect_format(raw: bytes) -> str | None:
+    """Actual image container from magic bytes, or None if unrecognised.
+
+    Used by BOTH product shapes. Before this, only the url path was validated;
+    a `b64_json` payload was decoded and written with no check at all, so an
+    upstream returning base64-of-HTML produced a file that looked like an image
+    to everything downstream. Same lane, two shapes, one trust level.
+    """
+    for sig, fmt in _IMAGE_MAGIC:
+        if raw.startswith(sig):
+            return fmt
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return "webp"
+    # ISOBMFF (HEIF/AVIF family): ....ftyp<brand>
+    if raw[4:8] == b"ftyp":
+        brand = raw[8:12]
+        if brand in (b"avif", b"avis"):
+            return "avif"
+        if brand in (b"heic", b"heix", b"mif1", b"msf1"):
+            return "heic"
+    return None
+
+
+def _looks_like_image(raw: bytes) -> bool:
+    return _detect_format(raw) is not None
+
+
+def _host_only(url: str) -> str:
+    """Hostname for error messages — never the query string (signed URLs)."""
+    try:
+        return urllib.parse.urlparse(url).hostname or "<unknown>"
+    except Exception:
+        return "<unparseable>"
+
+
+def _download_image(url: str, dest: str) -> tuple[int, str]:
+    """Download one image URL into `dest`; return (bytes written, detected format).
+
+    The format comes from the bytes we already have in memory — the caller must
+    NOT re-open the file to sniff it (that leaked a descriptor per image on a
+    long-lived server, and re-read what was just written).
+
+    Fails closed on every envelope violation. Reads in bounded chunks so an
+    over-size body is cut off mid-stream instead of after the fact.
+    """
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise RuntimeError(
+            f"ciyuan image url has unsupported scheme {parsed.scheme!r} "
+            f"(host={parsed.hostname or '<none>'}) — only http/https allowed"
+        )
+    req = urllib.request.Request(url, method="GET", headers={"Accept": "image/*"})
+    try:
+        with urllib.request.urlopen(req, timeout=URL_TIMEOUT_S) as resp:
+            content_type = (resp.headers.get("Content-Type") or "").lower()
+            if not content_type.startswith("image/"):
+                raise RuntimeError(
+                    f"ciyuan image url host={parsed.hostname} returned "
+                    f"Content-Type {content_type or '<none>'} — not an image"
+                )
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = resp.read(64 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_URL_BYTES:
+                    raise RuntimeError(
+                        f"ciyuan image url host={parsed.hostname} exceeded "
+                        f"{MAX_URL_BYTES} bytes — refusing oversized产物"
+                    )
+                chunks.append(chunk)
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(
+            f"ciyuan image url host={parsed.hostname} download failed (HTTP {e.code})"
+        ) from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(
+            f"ciyuan image url host={parsed.hostname} download failed ({e.reason})"
+        ) from e
+
+    raw = b"".join(chunks)
+    if not raw:
+        raise RuntimeError(f"ciyuan image url host={parsed.hostname} returned an empty body")
+    if not _looks_like_image(raw):
+        raise RuntimeError(
+            f"ciyuan image url host={parsed.hostname} body is not a known image format "
+            "(magic number check failed)"
+        )
+    fmt = _detect_format(raw)
+    with open(dest, "wb") as f:
+        f.write(raw)
+    return len(raw), fmt or ""
 
 
 def generate(
@@ -85,18 +204,33 @@ def generate(
 
     images = []
     for i, item in enumerate(items[: len(output_paths)]):
-        b64 = item.get("b64_json")
-        if not b64:
-            # b64 形态缺失（如只有 url）不在本车道契约内，如实报错而非猜
-            raise RuntimeError(
-                "ciyuan image item has no b64_json (keys: "
-                f"{sorted(item.keys())}) — 仅支持 b64_json 形态"
-            )
-        raw = base64.b64decode(b64)
         path = str(output_paths[i])
-        with open(path, "wb") as f:
-            f.write(raw)
-        images.append({"local_path": path, "file_size_bytes": len(raw)})
+        b64 = item.get("b64_json")
+        if b64:
+            raw = base64.b64decode(b64)
+            # 与 url 形态同等级别的校验：解码出来的必须真的是图像。
+            # 只在「认不出」时失败，并带上首字节，便于把新格式补进魔数表。
+            fmt = _detect_format(raw)
+            if fmt is None:
+                raise RuntimeError(
+                    "ciyuan image b64 payload is not a known image format "
+                    f"(first bytes: {raw[:12].hex()}) — 不写盘，避免产出打不开的假产物"
+                )
+            with open(path, "wb") as f:
+                f.write(raw)
+            images.append({"local_path": path, "file_size_bytes": len(raw), "format": fmt})
+            continue
+        url = item.get("url")
+        if url:
+            # 只在缺 b64 时才走 url（design D1：b64 优先，顺序固定）
+            written, fmt = _download_image(str(url), path)
+            images.append({"local_path": path, "file_size_bytes": written, "format": fmt})
+            continue
+        # 两种形态都缺：如实报错，绝不猜
+        raise RuntimeError(
+            "ciyuan image item has neither b64_json nor url (keys: "
+            f"{sorted(item.keys())}) — 产物形态不合规"
+        )
 
     return {
         "ok": True,

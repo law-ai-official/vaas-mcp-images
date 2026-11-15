@@ -486,7 +486,11 @@ class TestLaneHealthSurface:
     def test_lane_health_lookup_known_and_unknown(self):
         from mcp_server.lane_health import lane_health
         img = lane_health("image", "ciyuan")
-        assert img["health"] == "down" and img["reason_class"] == "upstream_blocked"
+        # 2026-11-15 实调销账（组 19 车道，台账行 386469）翻 active；
+        # 台账变更时断言跟着台账走，不许再咬旧状态。
+        assert img["health"] == "active" and img["reason_class"] == "none"
+        vid = lane_health("video", "ciyuan")
+        assert vid["health"] == "down" and vid["reason_class"] == "upstream_blocked"
         voice = lane_health("voice", "ciyuan")
         assert voice["health"] == "active"
         unknown = lane_health("voice", "mystery-provider")
@@ -496,28 +500,30 @@ class TestLaneHealthSurface:
         from mcp_server.tools.registry_tools import registry_list_generators
         out = registry_list_generators("image")
         by_name = {e["name"]: e for e in out["items"]}
-        assert by_name["seedream-ciyuan"]["lane"]["health"] == "down"
+        assert by_name["seedream-ciyuan"]["lane"]["health"] == "active"
         assert by_name["seedream"]["lane"]["health"] == "down"  # unconfigured ARK
         voice = registry_list_generators("voice")
         vby = {e["name"]: e for e in voice["items"]}
         assert vby["tts-ciyuan"]["lane"]["health"] == "active"
 
     def test_down_lane_refused_as_lane_down_before_subprocess(self, monkeypatch, isolated_downloads):
-        from mcp_server.generators import image as imod
+        # 标本改用 video.ciyuan（仍 down）：image.ciyuan 已实调销账翻 active，
+        # 「闸先于子进程」的拒绝路径需要一个 down 车道来证。
+        from mcp_server.generators import video as vmod
         from mcp_server.generators import runtime as rt
         monkeypatch.setattr(rt, "current_owner", lambda: "service")
         monkeypatch.setenv("VAAS_HOSTED", "1")  # gate is a hosted-surface discipline
         monkeypatch.setenv("OPENBAO_ADDR", "http://localhost:0")  # resolve() must not precede the gate; vault reachability is not under test here
         monkeypatch.setenv("OPENBAO_TOKEN", "test-token")
-        monkeypatch.setenv("IMAGE_PROVIDER", "ciyuan")
+        monkeypatch.setenv("VIDEO_PROVIDER", "ciyuan")
         calls = []
 
         def spy(cmd, ctx, timeout_s=None):  # must never be reached
             calls.append(cmd)
             raise AssertionError("down lane must be refused before subprocess")
-        monkeypatch.setattr(imod, "run_bridge", spy)
+        monkeypatch.setattr(vmod, "run_bridge", spy)
         with pytest.raises(Exception, match="lane_down"):
-            imod.generate(prompt="测试", output_format="jpeg")
+            vmod.generate(prompt="测试")
         assert not calls
 
     def test_models_voices_carries_lane_block(self):
@@ -572,22 +578,24 @@ class TestLaneGateUsesVaultProvider:
     闸门必须指向「实际在用的车道」（vault 记录优先），且仍先于凭证解析。"""
 
     def test_gate_names_vault_provider_not_env_default(self, monkeypatch, isolated_downloads):
-        from mcp_server.generators import image as imod
+        # 标本用 video kind（video.ciyuan 仍 down）；image.ciyuan 已销账翻 active，
+        # 拒绝路径需要一个 down 车道来证「闸门指向 vault 声明的车道」。
+        from mcp_server.generators import video as vmod
         from mcp_server.generators import runtime as rt
         from mcp_server import credentials as creds
         monkeypatch.setattr(rt, "current_owner", lambda: "service")
         monkeypatch.setenv("VAAS_HOSTED", "1")
         monkeypatch.setenv("OPENBAO_ADDR", "http://localhost:0")  # 解析必失败
         monkeypatch.setenv("OPENBAO_TOKEN", "test-token")
-        monkeypatch.delenv("IMAGE_PROVIDER", raising=False)       # env 未设 → 旧逻辑会猜 volcengine
+        monkeypatch.delenv("VIDEO_PROVIDER", raising=False)       # env 未设 → 旧逻辑会猜 volcengine
         # vault 记录声明实际车道 = ciyuan（容错预读只取 provider，不解析凭据）
         monkeypatch.setattr(creds, "provider_peek", lambda kind: "ciyuan")
-        monkeypatch.setattr(imod, "run_bridge", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not run")))
+        monkeypatch.setattr(vmod, "run_bridge", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not run")))
 
         with pytest.raises(Exception) as ei:
-            imod.generate(prompt="测试", output_format="jpeg")
+            vmod.generate(prompt="测试")
         msg = str(ei.value)
-        assert "lane_down (image/ciyuan)" in msg, msg
+        assert "lane_down (video/ciyuan)" in msg, msg
         assert "volcengine" not in msg, msg
 
     def test_healthy_vault_lane_not_blocked_by_down_env_lane(self, monkeypatch, isolated_downloads):
