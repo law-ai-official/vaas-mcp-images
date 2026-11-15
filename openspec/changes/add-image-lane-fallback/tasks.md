@@ -152,3 +152,15 @@
       `image.grok` → `active`，并把「承做方会漂」「图片有记账而视频没有」两条披露
       写进条目；`annotate()` 实测 `seedream-grok` 带 `lane.health=active / stale=false`。
       MCP 侧单测 537 passed / 15 skipped
+- [x] 8.12 vault→env 注入层补 grok 档（2026-11-16）：`credentials.py::subprocess_env`
+      此前只认 volcengine/ciyuan ⇒ 按 8.7 的计划把 `provider: grok` 写进 vault，会在
+      **真正注入凭据那一步**抛 `unsupported provider 'grok'`。而 8.4/8.8/8.11 已把
+      `image.grok`/`video.grok` 判成 active、8.10 已挂出 `seedream-grok`/`seedance-grok`
+      ——**台账与注册表都说这条车道能用，唯独这一层没有它的档位**，只会在部署当刻炸；
+      桥接器单测直接喂 `VIDEO_PROVIDER=grok`，正好绕过这一层（同族于「两层各自都对、
+      之间没人比」）。现补 `_GROK_ENV`：`GROK_API_KEY` / `GROK_BASE_URL` /
+      `GROK_IMAGE_MODEL` / `GROK_VIDEO_MODEL` + `<KIND>_PROVIDER=grok`；grok 无 TTS 档
+      显式拒绝（不静默落进 volcengine），未知档位报错文案改列 `volcengine, ciyuan, grok`。
+      改前实测 image/video 两个 kind 都抛、改后逐键核对 env（并断言不混进 `CIYUAN_API_KEY`/
+      `VIDEO_MODEL`——混进就会走被封的组 9 车道）；新增 4 条用例，`scripts/ci-local.sh`
+      541 passed / 15 skipped 全绿。

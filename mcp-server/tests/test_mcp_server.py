@@ -257,6 +257,70 @@ class TestCredentials:
         C.resolve("image"); C.resolve("image")
         assert len(hits) == 1  # second read served from cache
 
+    def test_hosted_grok_record_injects_grok_env(self, monkeypatch):
+        """vault 写 `provider: grok` 必须注入 GROK_* 与 `<KIND>_PROVIDER=grok`。
+
+        2026-11-16 修：这一档此前缺失 ⇒ `subprocess_env` 抛「unsupported provider
+        'grok'」。台账把 video.grok 判 active、注册表挂 seedance-grok 全都成立，
+        唯独真正注入凭据的这层没有它的档位——部署当刻才炸。判据钉具体键名与值，
+        只判「没抛错」的话把 _GROK_ENV 写成空 dict 也全绿。
+        """
+        from mcp_server import credentials as C
+        monkeypatch.setenv("VAAS_HOSTED", "1")
+        monkeypatch.setattr(C, "_cache", {})
+        monkeypatch.setattr(C, "_vault_get", lambda path: {
+            "api_key": "sk-group19", "base_url": "https://gw.example/v1",
+            "model": "grok-imagine-video", "provider": "grok",
+        } if path == "pool/wanxing/video" else None)
+        r = C.resolve("video")
+        assert r["provider"] == "grok"
+        env = C.subprocess_env(r, "video")
+        assert env["VIDEO_PROVIDER"] == "grok"
+        assert env["GROK_API_KEY"] == "sk-group19"
+        assert env["GROK_BASE_URL"] == "https://gw.example/v1"
+        assert env["GROK_VIDEO_MODEL"] == "grok-imagine-video"
+        # 不能混进 ciyuan 档的名字：那会让桥接器走 _ciyuan_video（被封的组 9 车道）
+        assert "CIYUAN_API_KEY" not in env and "VIDEO_MODEL" not in env
+
+    def test_hosted_grok_image_uses_image_model_env(self, monkeypatch):
+        """image 的模型要落 GROK_IMAGE_MODEL（桥接器读的是这个名字）。"""
+        from mcp_server import credentials as C
+        monkeypatch.setenv("VAAS_HOSTED", "1")
+        monkeypatch.setattr(C, "_cache", {})
+        monkeypatch.setattr(C, "_vault_get", lambda path: {
+            "api_key": "sk-group19", "model": "grok-imagine-image", "provider": "grok",
+        } if path == "pool/wanxing/image" else None)
+        env = C.subprocess_env(C.resolve("image"), "image")
+        assert env["IMAGE_PROVIDER"] == "grok"
+        assert env["GROK_IMAGE_MODEL"] == "grok-imagine-image"
+        assert env["GROK_API_KEY"] == "sk-group19"
+        assert "GROK_BASE_URL" not in env  # 记录里没 base_url 就不该凭空造一个
+
+    def test_hosted_grok_rejects_unsupported_kind(self, monkeypatch):
+        """grok 没有 TTS 档：显式拒绝，不静默落进 volcengine 分支。"""
+        from mcp_server import credentials as C
+        monkeypatch.setenv("VAAS_HOSTED", "1")
+        monkeypatch.setattr(C, "_cache", {})
+        monkeypatch.setattr(C, "_vault_get", lambda path: {
+            "api_key": "sk-group19", "provider": "grok",
+        } if path == "pool/wanxing/tts" else None)
+        with pytest.raises(C.CredentialUnavailable) as ei:
+            C.subprocess_env(C.resolve("tts"), "tts")
+        assert "does not serve tts" in str(ei.value)
+
+    def test_hosted_unknown_provider_message_lists_grok(self, monkeypatch):
+        """未知档位的报错要列出 grok——否则读的人以为只有两条路。"""
+        from mcp_server import credentials as C
+        monkeypatch.setenv("VAAS_HOSTED", "1")
+        monkeypatch.setattr(C, "_cache", {})
+        monkeypatch.setattr(C, "_vault_get", lambda path: {
+            "api_key": "sk-x", "provider": "bogus",
+        } if path == "pool/wanxing/image" else None)
+        with pytest.raises(C.CredentialUnavailable) as ei:
+            C.subprocess_env(C.resolve("image"), "image")
+        assert "unsupported provider 'bogus'" in str(ei.value)
+        assert "grok" in str(ei.value)
+
 
 class TestGenerationJobs:
     def test_job_lifecycle_and_owner_scoping(self):

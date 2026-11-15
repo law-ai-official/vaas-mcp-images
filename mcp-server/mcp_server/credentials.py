@@ -50,6 +50,21 @@ _CIYUAN_ENV = {
     "video": {"key": "CIYUAN_API_KEY", "base": "CIYUAN_BASE_URL", "model": "VIDEO_MODEL", "provider_env": "VIDEO_PROVIDER"},
 }
 
+# grok caliber（组 19 的 /v1/videos 与 /v1/images/generations 协议族）——
+# 2026-11-16 补：桥接器按 `<KIND>_PROVIDER=grok` 走 `_grok_video.py`（video）
+# 与 `_ciyuan_image`（image：同一端点形状，凭据优先 GROK_*、缺省回落 CIYUAN_*）。
+#
+# 为什么这一档非有不可：vault 记录写 `provider: grok` 时，`resolve()` 会把
+# provider 原样带下来，而 `subprocess_env()` 此前只认 volcengine/ciyuan ⇒ 抛
+# `unsupported provider 'grok'`。于是「台账把 video.grok 判成 active」「注册表
+# 挂出 seedance-grok」全都成立，**唯独真正注入凭据的这一步没有它的档位**——
+# 只会在部署当刻炸，本地单测看不见（桥接器单测直接喂 `VIDEO_PROVIDER=grok`，
+# 绕过了 credentials 这层）。同族于「两层各自都对、之间没人比」。
+_GROK_ENV = {
+    "image": {"key": "GROK_API_KEY", "base": "GROK_BASE_URL", "model": "GROK_IMAGE_MODEL", "provider_env": "IMAGE_PROVIDER"},
+    "video": {"key": "GROK_API_KEY", "base": "GROK_BASE_URL", "model": "GROK_VIDEO_MODEL", "provider_env": "VIDEO_PROVIDER"},
+}
+
 _SECRET_PATTERNS = [
     re.compile(r"ark-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[A-Za-z0-9]+"),
     re.compile(r"sk-[A-Za-z0-9_\-]{16,}"),
@@ -220,11 +235,24 @@ def subprocess_env(resolved: dict, kind: str) -> dict:
         if mapping.get("voice") and resolved.get("voice"):
             env[mapping["voice"]] = resolved["voice"]
         return env
+    if provider == "grok":
+        mapping = _GROK_ENV.get(kind)
+        if mapping is None:
+            # grok 没有 TTS 档：显式拒绝，别让它静默落进 volcengine 分支
+            raise CredentialUnavailable(
+                f"provider 'grok' does not serve {kind} (grok serves: image, video)"
+            )
+        env = {mapping["provider_env"]: "grok", mapping["key"]: resolved["api_key"]}
+        if resolved.get("base_url"):
+            env[mapping["base"]] = resolved["base_url"]
+        if resolved.get("model"):
+            env[mapping["model"]] = resolved["model"]
+        return env
     if provider != "volcengine":
         # 未知档位显式拒绝：不静默回落到任一可用后端（会把配置错误伪装成随机失败）。
         raise CredentialUnavailable(
             f"unsupported provider '{provider}' for {kind} credential "
-            "(supported: volcengine, ciyuan)"
+            "(supported: volcengine, ciyuan, grok)"
         )
     # Volcengine caliber (default): ARK env names.
     mapping = _KIND_ENV[kind]
