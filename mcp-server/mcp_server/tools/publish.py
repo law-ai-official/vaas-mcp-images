@@ -139,22 +139,50 @@ def publish_simulate(slug: str, type: str = "video", platforms: Optional[list[st
 
 def publish_record(slug: str, platform: str, status: str = "uploaded",
                    url: Optional[str] = None, account: Optional[str] = None,
-                   title: Optional[str] = None) -> dict:
+                   title: Optional[str] = None,
+                   recipient: Optional[str] = None,
+                   ack_declared: Optional[str] = None,
+                   ack_actual: Optional[str] = None,
+                   idem_key: Optional[str] = None) -> dict:
     """
     Explicitly record a publish result for an asset+platform.
 
     Upserts the distribution row and per-platform variant, and advances the
     asset stage to published on success.
+
+    `recipient` / `ack_*` / `idem_key` are the CaaS delivery dimensions
+    (openspec: add-caas-delivery-contract). Omitting them keeps the legacy
+    meaning — one row per (asset, platform), the platform broadcast — so old
+    callers are unaffected. Naming a `recipient` records a targeted delivery on
+    that same platform as a SEPARATE row with its own receipt.
+
+    `downgraded` is not a caller input on purpose: it is derived. A delivery
+    that declared `read` but can only prove `delivered` is downgraded, and
+    letting a caller assert otherwise would be exactly the fake receipt this
+    contract exists to prevent.
     """
     asset = get_asset_by_slug(slug)
     if not asset:
         raise ValueError(f"Asset not found: {slug}")
 
+    from ..caas import ack_projection
+
+    proj = ack_projection(ack_declared=ack_declared, ack_actual=ack_actual) if (ack_declared or ack_actual) else None
+
     insert_distribution(asset["id"], platform, url=url, status=status,
-                        error_message=None if status == "uploaded" else status)
+                        error_message=None if status == "uploaded" else status,
+                        recipient=recipient,
+                        ack_declared=proj and ack_declared,
+                        ack_actual=proj and proj.state,
+                        downgraded=bool(proj and proj.downgraded),
+                        idem_key=idem_key)
     if title:
         upsert_variant(asset["id"], platform, title=title,
                        extra={"account": account} if account else None)
     if status == "uploaded":
         update_asset_stage(asset["id"], "published", action=f"record:{platform}")
-    return {"slug": slug, "platform": platform, "status": status, "url": url}
+    return {
+        "slug": slug, "platform": platform, "status": status, "url": url,
+        "recipient": recipient,
+        **({"receipt": proj.as_dict()} if proj else {}),
+    }

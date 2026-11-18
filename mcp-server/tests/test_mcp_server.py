@@ -842,3 +842,74 @@ class TestGcForeignKeySafety:
         assert "old-asset" in ids, "referenced asset must survive"
         assert "free-asset" not in ids, "unreferenced old asset must be collected"
         assert removed == 1
+
+
+class TestPublishRecordCaas:
+    """publish_record 携带 CaaS 投递维度（openspec: add-caas-delivery-contract）。"""
+
+    def test_legacy_call_writes_platform_broadcast_row(self, isolated_db):
+        from mcp_server.db import get_connection, insert_asset
+        from mcp_server.tools.publish import publish_record
+
+        insert_asset(type="article", slug="legacy-article")
+        publish_record("legacy-article", platform="weixin", url="http://x", status="uploaded")
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT recipient, ack_declared, ack_actual, downgraded FROM distribution"
+        ).fetchone()
+        conn.close()
+        assert row["recipient"] is None, "no recipient = the platform broadcast, as before"
+        assert row["ack_declared"] is None and row["ack_actual"] is None
+
+    def test_targeted_delivery_records_its_own_receipt(self, isolated_db):
+        from mcp_server.db import get_connection, insert_asset
+        from mcp_server.tools.publish import publish_record
+
+        insert_asset(type="article", slug="targeted-article")
+        out = publish_record(
+            "targeted-article", platform="weixin", url="http://y", status="uploaded",
+            recipient="seat_1", ack_declared="read", ack_actual="delivered",
+            idem_key="idem-1",
+        )
+        assert out["receipt"]["state"] == "delivered"
+        assert out["receipt"]["downgraded"] is True
+
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT recipient, ack_declared, ack_actual, downgraded, idem_key FROM distribution"
+        ).fetchone()
+        conn.close()
+        assert row["recipient"] == "seat_1"
+        assert row["ack_declared"] == "read"
+        assert row["ack_actual"] == "delivered"
+        assert row["downgraded"] == 1
+        assert row["idem_key"] == "idem-1"
+
+    def test_downgrade_is_derived_not_caller_asserted(self, isolated_db):
+        """声明 read 却只能证明 delivered → 必须 downgraded，调用方无从覆盖。"""
+        from mcp_server.db import get_connection, insert_asset
+        from mcp_server.tools.publish import publish_record
+
+        insert_asset(type="article", slug="derive-article")
+        # 即便调用方声称已达 consumed，只要 ack_actual 是 delivered 就必须降级
+        publish_record(
+            "derive-article", platform="weixin", status="uploaded",
+            recipient="seat_2", ack_declared="read", ack_actual="delivered",
+        )
+        conn = get_connection()
+        row = conn.execute("SELECT downgraded FROM distribution").fetchone()
+        conn.close()
+        assert row["downgraded"] == 1
+
+    def test_broadcast_and_targeted_coexist_on_one_platform(self, isolated_db):
+        from mcp_server.db import get_connection, insert_asset
+        from mcp_server.tools.publish import publish_record
+
+        insert_asset(type="article", slug="both-article")
+        publish_record("both-article", platform="weixin", url="http://b", status="uploaded")
+        publish_record("both-article", platform="weixin", url="http://t", status="uploaded",
+                       recipient="seat_3")
+        conn = get_connection()
+        n = conn.execute("SELECT COUNT(*) AS n FROM distribution").fetchone()["n"]
+        conn.close()
+        assert n == 2, "same asset+platform, one broadcast + one targeted = two rows"
