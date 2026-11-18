@@ -38,8 +38,8 @@
       ⛔ 依赖 2.3 的实调证据（MUST NOT 无证据翻 active）
       `image.ciyuan` → `active`，`last_verified` 写当日，`reason` 写明生效的
       provider/model 与分组；`video.ciyuan` 保持 `down`（同一被封账号未解）
-- [ ] 3.2 出片并滚到 china-cheap-2（`VAAS_HOSTED=1` 那台）；判据 = 容器内
-      ⛔ 需要构建通道 + china-cheap-2 的 shell（100.64.0.16 现为 Permission denied）
+- [ ] 3.2 出片并滚到 china-<node-a>（`VAAS_HOSTED=1` 那台）；判据 = 容器内
+      ⛔ 需要构建通道 + china-<node-a> 的 shell（<render-node-a> 现为 Permission denied）
       `lane_health.json` 内容 + 公网 `registry_list_generators` 回读
 - [ ] 3.3 滚版后复跑一次 `generate_image`，确认走的是新车道
       ⛔ 依赖 3.2
@@ -120,7 +120,7 @@
       VAAS 专用钥应铸在 **user 128**（已在组 19 授权名单 `128→19`）名下，
       与 probe key 181 同法（app 写路径 + AES-256-GCM 补密文列），不动既有用户授权。
 - [ ] 8.7 vault 凭据记录（`vaas/pool/wanxing/video`：`{provider: grok, ...}`）
-      ⛔ vault 写权限 permission denied（OpenBAO 100.64.0.16:8200 未封印、可达，
+      ⛔ vault 写权限 permission denied（OpenBAO <render-node-a>:8200 未封印、可达，
       但本机无 `bao`/`vault` CLI 且 VAAS `.env` 无 `OPENBAO_TOKEN`；写入需一个
       path 受限 policy token，出处见 deploy/README「解封配方」的 root-only 文件），
       与 2.2 同一阻塞。**凭据本身已备好**（见 8.8a），只差写进 vault 这一步

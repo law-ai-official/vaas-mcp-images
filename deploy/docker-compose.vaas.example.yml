@@ -1,4 +1,4 @@
-# VAAS 生成面托管栈（示例：萬星试点实例，cheap-1 与网关同宿）。
+# VAAS 生成面托管栈（示例：萬星试点实例，<node> 与网关同宿）。
 # 真实值全部走部署侧 env/secret，不入仓。
 services:
   vaas-wanxing:

@@ -2,7 +2,7 @@
 
 ## Context
 
-VAAS MCP 是 FastMCP 3.x 单体（stdio），本地 SQLite（`data/vaas.db`，assets/variants/distribution 等 9 表）+ `downloads/` 文件树；生成链为 tools → generators → `scripts/litellm-bridge.py`（子进程，env 驱动、env 优先于 `.env`）→ 火山方舟直连。謙面网关（mcp-gateway-registry fork，cheap-1 compose）默认把入站身份头全部剥离后才转发上游；registry 栈内有 OpenBAO 但为 dev 模式（内存存储，重启丢数据）。2026-10-06 烤问定案 29 条（D1–D29），本 design 是其工程化。
+VAAS MCP 是 FastMCP 3.x 单体（stdio），本地 SQLite（`data/vaas.db`，assets/variants/distribution 等 9 表）+ `downloads/` 文件树；生成链为 tools → generators → `scripts/litellm-bridge.py`（子进程，env 驱动、env 优先于 `.env`）→ 火山方舟直连。謙面网关（mcp-gateway-registry fork，<node> compose）默认把入站身份头全部剥离后才转发上游；registry 栈内有 OpenBAO 但为 dev 模式（内存存储，重启丢数据）。2026-10-06 烤问定案 29 条（D1–D29），本 design 是其工程化。
 
 ## Goals / Non-Goals
 
@@ -39,7 +39,7 @@ VAAS HTTP 服务加 `GET /download/{asset_id}`（HMAC 签名绑 asset_id+owner+e
 每次生成写 `generation_usage`（owner/tool/provider/model/units/unit_type/credential_source）；定价住 `pricing.json`（结构与读取口进代码，初值按火山牌价人工填）；只读端点 `GET /usage/summary` 按 owner×工具聚合折价。sub2api 自动结算接线留二期。
 
 ### D-G 注册与部署形态
-谦面目录每线一条（`/vaas-wanxing` 试点，`/vaas-base` 待验收）；两实例同宿 cheap-1 compose（与网关、OpenBAO 同机，代理可达 + 内网绑定）；上游鉴权用静态 egress bearer；网关保守限流作成本保险丝。
+谦面目录每线一条（`/vaas-wanxing` 试点，`/vaas-base` 待验收）；两实例同宿 <node> compose（与网关、OpenBAO 同机，代理可达 + 内网绑定）；上游鉴权用静态 egress bearer；网关保守限流作成本保险丝。
 
 ### D-H 开源边界
 解析器/异步/端点代码进公开仓 fd-vaas-skills（逻辑无秘密）；vault 路径、池凭证、bootstrap token、定价初值、注册配置全在私有部署侧。

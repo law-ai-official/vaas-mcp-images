@@ -32,7 +32,7 @@
 
 ## 部署补证（2026-11-06 晚，主会话）：DEBT-IMGROLL-01 / DEBT-HEALTH-01 销账
 
-- **通道**：cheap-2 = <DEPLOY_NODE_IP>（tailnet <NODE_TAILNET_IP>:30950），sshpass+口令专线；节点无 rsync → tar-over-ssh 同步 `mcp-server/ scripts/ .agents/skills/fd-vaas-video-creator/types/` 到 `/opt/vaas-src-wave6`（6.4M）。
+- **通道**：<node-a> = <DEPLOY_NODE_IP>（tailnet <NODE_TAILNET_IP>:30950），sshpass+口令专线；节点无 rsync → tar-over-ssh 同步 `mcp-server/ scripts/ .agents/skills/fd-vaas-video-creator/types/` 到 `/opt/vaas-src-wave6`（6.4M）。
 - **构建选择**：节点 `df` 30G/25G used/5.9G avail；`docker run --rm` 实证现役 `sha-338ed2f` 已含 ffmpeg/ffprobe/chromium + mutagen/playwright/markdown/fastmcp。故采用 **FROM 现役镜像的增量构建**（清树 COPY 防退役文件残留 + pip 复核 `deps-ok`），共享渲染底座层，仅叠加 6.4M 源码——避免全量 FROM 再吃 2.4G。canonical 全量 Dockerfile 仍是 build-pool 通道真源，根 shim `cmp` IDENTICAL。
 - **滚版**：`/opt/vaas-deploy/docker-compose.vaas.yml` 改 tag → `sha-wave6-202611061854` + 新增 healthcheck（interval 30s/start_period 20s）；`docker compose -f docker-compose.vaas.yml up -d --no-deps --force-recreate vaas-wanxing`（坑：文件名非默认必须显式 `-f`，否则 "no configuration file provided"）。现网 `docker inspect` = healthy。
 - **探针**：`scripts/probe_hosted_surface.py` 新增可选 `VAAS_PROBE_USER`（hosted 身份 `X-Forwarded-User` fail-closed 必带）；实跑 **6/6 PASS**：17 工具面精确、publish 面不可见、publish_video 调用拒、discovery lane health 10 块（5 down 如实暴露）。

@@ -102,7 +102,7 @@ class Builder:
 
 ## 部署与容量（多机器）
 
-- 渲染面 c 候选机：cheap-6（8c/7.9G，余 ~2.5G）最优；cheap-1（4c/3.9G 余 2.0G）次之；cheap-3 盘紧（89%）。**不绑定单机**：`VAAS_RENDER_URL` 可指向任一实例或 LB。
+- 渲染面 c 候选机：<node>（8c/7.9G，余 ~2.5G）最优；<node>（4c/3.9G 余 2.0G）次之；<node> 盘紧（89%）。**不绑定单机**：`VAAS_RENDER_URL` 可指向任一实例或 LB。
 - 并发：单机 `-w 1` 起步（每 worker 一个 Chrome ~256MB），随内存加 worker；VAAS 侧作业队列 + 多实例派发。
 - 渲染面镜像：Node 22 + `hyperframes@0.9.26` + chromium + ffmpeg + 字体；约 +2.5GB（含浏览器），放专用机。
 

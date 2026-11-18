@@ -172,8 +172,19 @@ def init_schema(db_path: Optional[Path] = None) -> None:
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_distribution_asset ON distribution(asset_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_distribution_platform ON distribution(platform)")
-    # One row per (asset, platform): last publish wins
-    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_distribution_asset_platform ON distribution(asset_id, platform)")
+    # CaaS (openspec: add-caas-delivery-contract): a delivery names a RECIPIENT,
+    # not just a platform. `platform` stays as one kind of recipient value, so a
+    # null `recipient` means "the platform broadcast this table has always
+    # modelled" — legacy rows keep their exact meaning.
+    _migrate_distribution_recipient(conn)
+    # One row per (asset, platform, recipient): last delivery wins per target.
+    # Must come AFTER the column exists, and is written as out-of-line UNIQUE
+    # (a partial index) so the NULL-recipient legacy rows keep collapsing to one
+    # per (asset, platform).
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_distribution_asset_platform_recipient"
+        " ON distribution(asset_id, platform, COALESCE(recipient, ''))"
+    )
 
     # ─── Generic asset history (asset_id + video_id, both nullable) ──────
     conn.execute("""
@@ -226,6 +237,33 @@ def init_schema(db_path: Optional[Path] = None) -> None:
 
     conn.commit()
     conn.close()
+
+
+def _migrate_distribution_recipient(conn: sqlite3.Connection) -> None:
+    """Add the CaaS delivery columns to a pre-existing `distribution` table.
+
+    Idempotent, additive, and meaning-preserving: a legacy row has
+    `recipient IS NULL`, which the DDL comment and every reader treat as "the
+    platform broadcast" — exactly what this table modelled before. The old
+    per-(asset, platform) unique index MUST be dropped or a second recipient for
+    the same platform could never be inserted; the replacement index folds the
+    recipient in with COALESCE so legacy rows still collapse to one.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(distribution)").fetchall()}
+    if not columns:
+        return  # fresh DB: the CREATE above already has every column
+    additions = {
+        "recipient": "TEXT",
+        "ack_declared": "TEXT",
+        "ack_actual": "TEXT",
+        "downgraded": "INTEGER NOT NULL DEFAULT 0",
+        "idem_key": "TEXT",
+    }
+    for name, decl in additions.items():
+        if name not in columns:
+            conn.execute(f"ALTER TABLE distribution ADD COLUMN {name} {decl}")
+    conn.execute("DROP INDEX IF EXISTS uq_distribution_asset_platform")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_distribution_idem ON distribution(idem_key)")
 
 
 def _migrate_assets_owner(conn: sqlite3.Connection) -> None:

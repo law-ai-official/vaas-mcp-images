@@ -30,4 +30,4 @@
 - **代码/镜像**：`deploy/mcp-server.Dockerfile` 与根 shim（双写同步，直至 add-ci-and-provisioning 落单源）、`scripts/litellm-bridge.py`、`scripts/_ciyuan_tts.py`、`mcp-server/mcp_server/generators/tts.py`、`tools/templates.py`（fail-open 与标注）、`tools/generate.py`/`registry.py`（health 字段）、`tests/test_hosted_surface.py` 与新增 health 测试。
 - **外依赖**：sub2api（词元）账号修复——跨仓操作，挂账跟踪直至实调销账；期间 image/video 车道如实标 down。
 - **验收**：hosted 实例上五类型 type 模式 voice_path 腿 + TTS 腿成片、render_still/render_document/voiceover_assemble 成片、长文（>170 字）generate_voice 成功且带 synthetic captions、探针输出车道健康全表；证据记入本 change 目录。
-- **风险**：镜像体积显著增大（chromium+fonts 约 +500MB）——词元线部署节点磁盘此前有事故先例，上线前核对 cheap-2 余量并记入 deploy README。
+- **风险**：镜像体积显著增大（chromium+fonts 约 +500MB）——词元线部署节点磁盘此前有事故先例，上线前核对 <node-a> 余量并记入 deploy README。

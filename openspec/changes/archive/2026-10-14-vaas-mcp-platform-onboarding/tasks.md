@@ -37,14 +37,14 @@
 
 ## 6. OpenBAO 生产化与凭证 seed（生产变更，低峰执行）
 
-- [x] 6.1 cheap-1 上导出在役 KV 全量快照（dev 模式内存数据），演练回滚路径；验证：快照可完整列出全部既有路径
+- [x] 6.1 <node> 上导出在役 KV 全量快照（dev 模式内存数据），演练回滚路径；验证：快照可完整列出全部既有路径
 - [x] 6.2 切 file backend + 数据卷 + 重启，重 seed 快照并验证栈服务读回；验证：registry 栈健康检查通过 + 抽查 3 个既有 secret 读回一致
 - [x] 6.3 签发 VAAS 专用 policy token（仅 `vaas/*` 路径）；验证：该 token 可读写 vaas/*、读不到其他路径
 - [x] 6.4 seed 萬星线池凭证（新轮换的 ARK key，不回 `.env`）与服务默认凭证（含 download-hmac）；验证：经 policy token 读到且旧 key 已吊销失效
 
 ## 7. 容器化与部署（萬星试点）
 
-- [x] 7.1 mcp-server Dockerfile（不含 Remotion 重依赖，生成面镜像）+ TCR 通道构建；验证：镜像在 cheap-1 可拉起 /health 200
+- [x] 7.1 mcp-server Dockerfile（不含 Remotion 重依赖，生成面镜像）+ TCR 通道构建；验证：镜像在 <node> 可拉起 /health 200
 - [x] 7.2 compose 服务（`vaas-wanxing`）：bootstrap env、内网端口、数据卷（vaas.db + downloads）；验证：容器启动自举建库、日志无凭证明文
 - [x] 7.3 謙面注册 `/vaas-wanxing`：proxy_pass_url、静态 egress bearer、`identity_forwarding` 旗开、Logto group 可见性、保守限流；验证：经网关带客户 token initialize/tools/list 成功且不含 publish 工具
 - [x] 7.4 端到端冒烟：经网关生成图片 → 返回下载地址 → 取回文件 → usage/summary 出现该租户记录且凭证来源=线池；验证：冒烟记录归档

@@ -666,3 +666,134 @@ class TestAssetsSignedUrl:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestCaasDelivery:
+    """CaaS delivery columns on `distribution` (openspec: add-caas-delivery-contract).
+
+    The table was platform-keyed and had never held a real row. The CaaS change
+    makes a delivery name a RECIPIENT too, without changing what a legacy row
+    means: `recipient IS NULL` is still "the platform broadcast".
+    """
+
+    def test_legacy_call_is_unchanged(self, isolated_db):
+        aid = insert_asset(type="video", slug="t-caas-legacy")
+        insert_distribution(aid, "douyin", url="http://a", status="uploaded")
+        insert_distribution(aid, "douyin", url="http://b", status="uploaded")
+        asset = get_asset_by_slug("t-caas-legacy")
+        assert len(asset["distribution"]) == 1, "one row per (asset, platform) for the legacy null-recipient case"
+        assert asset["distribution"][0]["url"] == "http://b"
+
+    def test_two_recipients_on_one_platform_get_independent_receipts(self, isolated_db):
+        aid = insert_asset(type="video", slug="t-caas-two")
+        insert_distribution(aid, "douyin", url="http://broadcast", status="uploaded",
+                            ack_declared="delivered", ack_actual="delivered")
+        insert_distribution(aid, "douyin", recipient="seat_9", url="http://direct", status="uploaded",
+                            ack_declared="read", ack_actual="delivered", downgraded=True)
+
+        conn = database.get_connection()
+        rows = list(conn.execute(
+            "SELECT platform, recipient, ack_declared, ack_actual, downgraded FROM distribution "
+            "WHERE asset_id = ? ORDER BY id", (aid,)))
+        conn.close()
+        assert len(rows) == 2, "the same content reached a platform broadcast AND a named recipient"
+        assert rows[0]["recipient"] is None
+        assert rows[1]["recipient"] == "seat_9"
+        assert rows[1]["downgraded"] == 1, "declared read but proved delivered must be recorded as degraded"
+
+    def test_delivery_is_idempotent_per_recipient(self, isolated_db):
+        aid = insert_asset(type="video", slug="t-caas-idem")
+        insert_distribution(aid, "weixin", recipient="seat_1", url="http://x", status="uploaded",
+                            idem_key="k-1")
+        insert_distribution(aid, "weixin", recipient="seat_1", url="http://x", status="uploaded",
+                            idem_key="k-1")
+        conn = database.get_connection()
+        n = conn.execute(
+            "SELECT COUNT(*) AS n FROM distribution WHERE asset_id = ? AND recipient = 'seat_1'",
+            (aid,)).fetchone()["n"]
+        conn.close()
+        assert n == 1, "the same delivery to the same recipient does not duplicate"
+
+    def test_migration_is_idempotent_and_preserves_legacy_rows(self, tmp_path):
+        """A pre-CaaS database migrates in place: columns added, old row kept, old index dropped."""
+        import sqlite3
+
+        db = tmp_path / "legacy.db"
+        c = sqlite3.connect(db)
+        c.executescript(
+            """
+            CREATE TABLE assets (id TEXT PRIMARY KEY, type TEXT, slug TEXT, stage TEXT,
+              parent_id TEXT, lineage_root TEXT, provider TEXT, file_path TEXT, metadata JSON,
+              video_id INTEGER, created_at TEXT, updated_at TEXT);
+            CREATE TABLE distribution (id INTEGER PRIMARY KEY AUTOINCREMENT, asset_id TEXT NOT NULL,
+              video_id INTEGER, platform TEXT NOT NULL, url TEXT, status TEXT DEFAULT 'pending',
+              error_message TEXT, published_at TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+            CREATE UNIQUE INDEX uq_distribution_asset_platform ON distribution(asset_id, platform);
+            INSERT INTO distribution (asset_id, platform, status) VALUES ('a1', 'weixin', 'uploaded');
+            """
+        )
+        c.commit()
+        c.close()
+
+        init_schema(db)
+        init_schema(db)  # idempotent: a restart must not error
+
+        c = sqlite3.connect(db)
+        cols = [r[1] for r in c.execute("PRAGMA table_info(distribution)")]
+        idx = [r[1] for r in c.execute("PRAGMA index_list(distribution)")]
+        row = c.execute("SELECT recipient, downgraded FROM distribution").fetchone()
+        c.close()
+        for new_col in ("recipient", "ack_declared", "ack_actual", "downgraded", "idem_key"):
+            assert new_col in cols
+        assert "uq_distribution_asset_platform" not in idx, "the old 2-column unique index must go"
+        assert "uq_distribution_asset_platform_recipient" in idx
+        assert row[0] is None and row[1] == 0, "the legacy row keeps its broadcast meaning"
+
+
+class TestCaasEnvelope:
+    """The VAAS reader of the CaaS authority (openspec: add-caas-delivery-contract)."""
+
+    def test_forms_and_version(self):
+        from mcp_server import caas
+
+        assert isinstance(caas.version(), int)
+        assert set(caas.forms()) == {"text", "chart", "file", "asset", "link"}
+
+    def test_resolve_form_and_recipient_veto(self):
+        from mcp_server import caas
+
+        assert caas.resolve_form(["chart", "asset"], caas.caps_for("a2a-slug")) == "asset"
+        assert caas.resolve_form(["chart"], caas.caps_for("a2a-slug")) is None
+
+    def test_ack_alias_and_downgrade(self):
+        from mcp_server import caas
+
+        assert caas.canonical_ack("read") == "consumed"
+        p = caas.ack_projection(ack_declared="read", ack_actual="delivered")
+        assert p.state == "delivered" and p.downgraded is True
+        ok = caas.ack_projection(ack_declared="delivered", ack_actual="consumed")
+        assert ok.downgraded is False
+
+    def test_validate_envelope_names_missing(self):
+        from mcp_server import caas
+
+        r = caas.validate_envelope({})
+        assert r.ok is False
+        assert set(r.missing) == {"to", "forms", "ack", "correlation.idem"}
+        ok = caas.validate_envelope(
+            {"to": {"seatId": "s1"}, "forms": ["chart"], "ack": "delivered", "correlation": {"idem": "k"}}
+        )
+        assert ok.ok is True
+
+    def test_copy_is_byte_identical_to_authority(self):
+        import hashlib
+        from pathlib import Path
+
+        from mcp_server import caas
+
+        copy = Path(caas.__file__).with_name("caas-forms.json")
+        authority = Path(__file__).parents[3] / "openspec" / "changes" / "add-caas-delivery-contract" / "caas-forms.json"
+        if not authority.exists():
+            pytest.skip("authority file not present in this checkout")
+        sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+        assert sha(copy) == sha(authority), "caas-forms.json 副本与权威文件不一致"

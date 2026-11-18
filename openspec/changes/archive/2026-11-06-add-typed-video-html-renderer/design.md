@@ -41,7 +41,7 @@ compose_storyboard（既有管线：seek 契约逐帧 → ffmpeg → bgm 混流 
 ## Risks / Trade-offs
 
 - **视觉保真**：HTML 版 ≠ Remotion 版逐像素——动效语言（弹入/生长/描画）保真，版式细节重排。验收以 video-types 行为级 Scenario 为准，不做像素对照。
-- **cheap-2 RAM 3.9G**：类型渲染与 storyboard 同底座，无新增常驻——风险不变。
+- **<node-a> RAM 3.9G**：类型渲染与 storyboard 同底座，无新增常驻——风险不变。
 - **补图确认在 MCP 语境的交互**：v1 用「pending → 二次调用 confirm」协议，比 CLI 打印确认笨但诚实；skill 文档同步写清。
 
 ## Migration Plan

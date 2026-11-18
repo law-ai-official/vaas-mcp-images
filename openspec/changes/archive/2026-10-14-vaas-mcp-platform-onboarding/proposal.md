@@ -12,7 +12,7 @@ VAAS MCP 目前是本机 stdio 单租户服务：无调用者身份、无租户�
 - **托管传输与端点**：MCP 服务器支持 HTTP 托管模式（本地 stdio 不变）；新增带签名过期 URL 的产物下载端点、健康检查、按 owner 汇总的只读计价用量端点。
 - **registry fork 补丁**（跨仓，`~/code/mcp-gateway-registry`）：server 注册项新增 opt-in `identity_forwarding` 旗，开启后代理跳把已验证 claims 的 `sub` 以 `X-Forwarded-User` 注入上游请求。
 - **OpenBAO 生产化**（部署任务）：registry 栈内 OpenBAO 从 dev 模式切 file backend + 数据卷 + path 受限 policy token；seed 萬星线池凭证与服务默认凭证。
-- **部署与注册**：mcp-server 容器化，落 cheap-1 与网关同宿；謙面目录注册 `/vaas-wanxing`（试点）；`/vaas-base` 待萬星试点验收后照方抓药。
+- **部署与注册**：mcp-server 容器化，落 <node> 与网关同宿；謙面目录注册 `/vaas-wanxing`（试点）；`/vaas-base` 待萬星试点验收后照方抓药。
 - 二期（BYOK + OBO + 控制台录键页）**不在本 change**，另立 change。
 
 ## Capabilities

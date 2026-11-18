@@ -33,6 +33,6 @@
 
 ### W5 验收与收口
 
-- [x] W5.1 2026-11-06 上产 cheap-2（<DEPLOY_NODE_IP> / tailnet <NODE_TAILNET_IP>:30950）：tar-over-ssh 源码树 → 增量镜像 `sha-wave6-202611061854` → compose tag+healthcheck → force-recreate → healthy；probe_hosted_surface.py 6/6 PASS（新增 X-Forwarded-User 租户头支持）；长文 voice E2E 4 段合成字幕全绿；见 evidence/verification-notes.md 部署补证节
+- [x] W5.1 2026-11-06 上产 <node-a>（<DEPLOY_NODE_IP> / tailnet <NODE_TAILNET_IP>:30950）：tar-over-ssh 源码树 → 增量镜像 `sha-wave6-202611061854` → compose tag+healthcheck → force-recreate → healthy；probe_hosted_surface.py 6/6 PASS（新增 X-Forwarded-User 租户头支持）；长文 voice E2E 4 段合成字幕全绿；见 evidence/verification-notes.md 部署补证节
 - [x] W5.2 全量 pytest 380 绿（新增 10 项）+ test_hosted_surface 17/23 面形不回退；deploy README 存活节已有镜像体积警示（能力矩阵与车道健康文档随滚版探针一并同步——sync-external-ledgers W3 承接 trial 面）
 - [x] W5.3 勾 tasks、strict 校验绿；归档随滚版批次（W1.2/W4/W5.1 三项部署侧收口后与本波统一收，车道 down 如实保留=车道缺陷条款允许）

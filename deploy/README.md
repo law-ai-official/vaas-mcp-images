@@ -141,20 +141,20 @@ fd-build-snapshot <VAAS 源码或 git URL> -R law-ai-official/vaas-mcp-images --
 gh workflow run images.yml -R law-ai-official/vaas-mcp-images -f target=vaas-render-plane
 # 等 relay 回灌 ccr，用凭据实证（匿名 inspect 是假阴性）：
 ssh cheap3 'source /etc/tcr-relay/env && skopeo inspect --creds "$TCR_USER:$TCR_PASS" \
-  docker://ccr.ccs.tencentyun.com/yizuo/vaas-render-plane:sha-<7>'
+  docker://<registry>/yizuo/vaas-render-plane:sha-<7>'
 ```
 
 节点侧（推荐：与 API 面**分机**部署——渲染吃 CPU/内存，别和 API 抢）：
 
 ```bash
-docker pull ccr.ccs.tencentyun.com/yizuo/vaas-render-plane:sha-<7>
+docker pull <registry>/yizuo/vaas-render-plane:sha-<7>
 # 无出网但允许 tailnet 入站：关 masquerade（发布端口 DNAT 仍生效，出站 NAT 被断）
 docker network create --driver bridge \
   -o com.docker.network.bridge.enable_ip_masquerade=false vaas-render-ext
 docker run -d --name vaas-renderer --restart unless-stopped --network vaas-render-ext \
   -p <NODE_TAILNET_IP>:8099:8099 --shm-size=2g --memory=4g \
   -e VAAS_RENDER_MAX_CONCURRENCY=3 \
-  ccr.ccs.tencentyun.com/yizuo/vaas-render-plane:sha-<7>
+  <registry>/yizuo/vaas-render-plane:sha-<7>
 # 落地自检：/healthz 的 doctor.checks 必须全 OK（尤其 Memory），并确认容器内无出网
 ```
 

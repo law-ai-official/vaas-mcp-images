@@ -8,7 +8,7 @@
 
 > W2/W5 收口（2026-11-09）：W2.1–2.4 与 W5.1–5.4 均已完成——composition.py（spec 校验/编译/品牌令牌/零外链）+ 35 单测；测试重定向后全套 **451 passed / 15 skipped**（skip 均为已迁移能力：旧 BGM 混流 6、route-guard 探针 2、真实出片 7）；确定性双跑、隔离（env 白名单/零残留/429/断网）、still/doc 回归均在容器与生产实测通过。W2.3（前端库 vendor）**按设计不做**：五构建器只用 CSS + seek_js，无第三方前端库。
 
-> W6 完成记录（2026-11-09）：渲染面部署 cheap-2（`--network vaas-render-net` internal + `--shm-size=512m --memory=3g`，健康），API 面 join 同网、`VAAS_RENDER_URL=http://vaas-renderer:8099`，镜像 sha-419036e 上产。**生产 E2E 全绿**：五类型（news-flash 295KB / carousel 430KB / listicle 374KB / data-viz 236KB / kinetic-quote 250KB，enginx=hyperframes@0.9.26 + 签名下载）+ still/doc 回归 + 确定性双跑 md5 一致（fb62dc17bd12）。E2E 抓出并修复：data-viz 的 `fmtNum` 块作用域跨引用（渲染面 500）。文档：deploy README 渲染面一节、SKILL.md 契约改 composition、ADR-0004 增补。
+> W6 完成记录（2026-11-09）：渲染面部署 <node-a>（`--network vaas-render-net` internal + `--shm-size=512m --memory=3g`，健康），API 面 join 同网、`VAAS_RENDER_URL=http://vaas-renderer:8099`，镜像 sha-419036e 上产。**生产 E2E 全绿**：五类型（news-flash 295KB / carousel 430KB / listicle 374KB / data-viz 236KB / kinetic-quote 250KB，enginx=hyperframes@0.9.26 + 签名下载）+ still/doc 回归 + 确定性双跑 md5 一致（fb62dc17bd12）。E2E 抓出并修复：data-viz 的 `fmtNum` 块作用域跨引用（渲染面 500）。文档：deploy README 渲染面一节、SKILL.md 契约改 composition、ADR-0004 增补。
 
 - [x] W1.1 渲染面镜像：Node 22 + `hyperframes@0.9.26`（npmmirror 构建、精确钉版、lockfile）+ chromium + ffmpeg + CJK 字体；构建期 `hyperframes doctor` 门禁
 - [x] W1.2 `POST /v1/render` 作业 API（无状态）：composition + 素材（multipart/sha256）→ 成片（流式或上传地址）+ 引擎版本 + 耗时 + 告警
@@ -59,7 +59,7 @@
 
 ### W6 上产与收口
 
-- [x] W6.1 渲染面部署（推荐 cheap-6 8c/7.9G，不绑单机）+ `VAAS_RENDER_URL` 接入 API 面；多实例派发冒烟
+- [x] W6.1 渲染面部署（推荐 <node> 8c/7.9G，不绑单机）+ `VAAS_RENDER_URL` 接入 API 面；多实例派发冒烟
 - [x] W6.2 生产 E2E：五类型 voice_path 腿（mp4 + 签名下载 + 帧级确定性）+ still/doc 回归
 - [x] W6.3 文档：`fd-vaas-storyboard` SKILL.md 改 composition 格式/适配器/轨模型；deploy README（渲染面 + 钉版 + 隔离）
 - [x] W6.4 ADR-0004 增补（渲染面独立、API 面保持无 Node）

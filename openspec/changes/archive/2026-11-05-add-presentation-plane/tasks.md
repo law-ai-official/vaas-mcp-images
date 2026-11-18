@@ -44,12 +44,12 @@
 
 ### W7 部署与收口
 - [x] W7.6 hosted type 模式限定收口：render_video(type=...) 托管实例显式报错（ADR-0004 托管镜像无 node/Remotion，指路 storyboard 模式）；templates_list 视频类型加 runtime=local_stdio_only 标注；spec render_video requirement 修订（hosted carve-out + size dict 归一 + 相对路径解析入契约）
-- [ ] W7.5 生成面凭证池恢复——**change 外挂账，不阻归档**（本 change 交付物=展示面渲染链，已全绿；此项是 infra 恢复：等用户在词元控制台重出组3(语音)/组9(图像+视频) key → seed `secret/vaas/pool/wanxing/{tts,image,video}`（bao 在 cheap-2 /opt/vaas-bao，root token 在 /opt/vaas-bao/root_token.txt）→ 生成类 E2E 复验。自力路径已全试毙（旧 ARK key 401 已轮换、FindDataRouter admin API 不可猜、节点无遗留 env），跨 change 追踪于会话记忆）
+- [ ] W7.5 生成面凭证池恢复——**change 外挂账，不阻归档**（本 change 交付物=展示面渲染链，已全绿；此项是 infra 恢复：等用户在词元控制台重出组3(语音)/组9(图像+视频) key → seed `secret/vaas/pool/wanxing/{tts,image,video}`（bao 在 <node-a> /opt/vaas-bao，root token 在 /opt/vaas-bao/root_token.txt）→ 生成类 E2E 复验。自力路径已全试毙（旧 ARK key 401 已轮换、FindDataRouter admin API 不可猜、节点无遗留 env），跨 change 追踪于会话记忆）
 
 - [x] W7.1 镜像构建（+echarts vendor、种子曲库；pandoc 不进本版）+ 上产 + 探针全绿
-      - 完成（11-05）：镜像 sha-d77874a 上产（cheap-2 compose）；工具面探针 5/5 PASS；渲染面生产 E2E 全绿——render_still(chart)+签名下载 PNG、render_document(pdf+longimage)、render_video(storyboard chart桥+dict size 归一) mp4 签名下载、generate_voice 诚实失败（凭证缺失按设计报错）
+      - 完成（11-05）：镜像 sha-d77874a 上产（<node-a> compose）；工具面探针 5/5 PASS；渲染面生产 E2E 全绿——render_still(chart)+签名下载 PNG、render_document(pdf+longimage)、render_video(storyboard chart桥+dict size 归一) mp4 签名下载、generate_voice 诚实失败（凭证缺失按设计报错）
       - 附带修复两处接缝（随 commit）：render_video 输入路径解析收 downloads 相对路径（render_still→kenburns 桥）；storyboard.size 收 dict 归一
-      - 先在事故处置：OpenBAO 已于 11-04 被退役清理，本 change 在 cheap-2 重建极简 bao（file backend+自解封循环 /opt/vaas-bao，KV v2），seed download-hmac；凭证池等用户重出 key（见 W7.5）
+      - 先在事故处置：OpenBAO 已于 11-04 被退役清理，本 change 在 <node-a> 重建极简 bao（file backend+自解封循环 /opt/vaas-bao，KV v2），seed download-hmac；凭证池等用户重出 key（见 W7.5）
 - [x] W7.2 pricing.json 补 render_video（second）/render_still（张）/render_document（份），本地算力 0.0 计价口径
 - [x] W7.3 README 工具表重写（新命名空间 + hosted/stdio 两面清单）
 - [x] W7.4 外账记录（本仓外，另起会话）：finddata `docs/vaas-trial-intro.md` 工具清单、`docs/vaas-presets/` pack 增补两 skill、`MCP-REGISTRY.md` `/vaas-wanxing` 行；部署后壹座重烘焙 registry 快照

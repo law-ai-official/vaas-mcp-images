@@ -29,17 +29,17 @@ git push origin main
 - **检查点 C1**：`git apply --check` = OK；`node --check` = OK；`git show --stat HEAD` 只含 `render-plane/server.mjs`（+29/−3）。
 - **不改 meshing 语义**：`ESRCH` 仍吞、`pid=0` 仍直接 return（diff 里已注明）。
 
-## 2. 部署到 cheap-4
+## 2. 部署到 <node-b>
 
-镜像 `ccr.ccs.tencentyun.com/yizuo/vaas-render-plane:sha-fba0c12`（GHA run 42813304322，target=vaas-render-plane，含 `/healthz` 冒烟门）。
-**权威可用性（双仓已核）**：hkccr OK / ccr OK（从部署节点验；cheap-4 对 hkccr 无凭据，不能从那边判断）。
+镜像 `<registry>/yizuo/vaas-render-plane:sha-fba0c12`（GHA run 42813304322，target=vaas-render-plane，含 `/healthz` 冒烟门）。
+**权威可用性（双仓已核）**：hkccr OK / ccr OK（从部署节点验；<node-b> 对 hkccr 无凭据，不能从那边判断）。
 
 ```bash
-# 在 cheap-4（100.64.0.8）上执行 —— 与台账回滚命令同形，仅镜像 tag 换成 fba0c12
-docker pull ccr.ccs.tencentyun.com/yizuo/vaas-render-plane:sha-fba0c12
+# 在 <node-b>（<render-node-b>）上执行 —— 与台账回滚命令同形，仅镜像 tag 换成 fba0c12
+docker pull <registry>/yizuo/vaas-render-plane:sha-fba0c12
 docker rm -f vaas-renderer
 docker run -d --name vaas-renderer --restart no --network vaas-render-ext \
-  --memory=4g --shm-size=2g -p 100.64.0.8:8099:8099 \
+  --memory=4g --shm-size=2g -p <render-node-b>:8099:8099 \
   -e VAAS_RENDER_MAX_CONCURRENCY=3 -e VAAS_RENDER_PORT=8099 \
   -e VAAS_RENDER_WORKDIR=/tmp/vaas-render \
   -e HYPERFRAMES_BROWSER_PATH=/usr/bin/chromium \
@@ -47,10 +47,10 @@ docker run -d --name vaas-renderer --restart no --network vaas-render-ext \
   -e HYPERFRAMES_NO_TELEMETRY=1 -e HYPERFRAMES_NO_AUTO_INSTALL=1 \
   -e HYPERFRAMES_NO_OPTIONAL_INSTALL=1 -e HYPERFRAMES_NO_UPDATE_CHECK=1 \
   -e HYPERFRAMES_CACHE_DIR=/tmp/hf-cache -e HYPERFRAMES_MEDIA_HOME=/tmp/hf-media \
-  ccr.ccs.tencentyun.com/yizuo/vaas-render-plane:sha-fba0c12
+  <registry>/yizuo/vaas-render-plane:sha-fba0c12
 ```
 
-- **检查点 C2（部署生效）**：`docker ps` 的 `Image` = `…:sha-fba0c12`；`curl -s http://100.64.0.8:8099/healthz` → `ok:true`、`workers:3`；`docker exec vaas-renderer grep -c killGroup /app/server.mjs` ≥ 3（确认代码真的进了镜像层）。
+- **检查点 C2（部署生效）**：`docker ps` 的 `Image` = `…:sha-fba0c12`；`curl -s http://<render-node-b>:8099/healthz` → `ok:true`、`workers:3`；`docker exec vaas-renderer grep -c killGroup /app/server.mjs` ≥ 3（确认代码真的进了镜像层）。
 - 无需 `VAAS_RENDER_DEBUG`：`[killGroup]` 是**无条件 console.log**，`docker logs` 直接可见。
 - 若拉取失败：先 `fd-build-channel` 判路，再按通道重出（`fd-build-snapshot` → `gh workflow run images.yml -f target=vaas-render-plane`）；不要手工 `docker build`。
 
@@ -88,11 +88,11 @@ git push origin main
 ## 5. 回滚（任何一步异常立即执行）
 
 ```bash
-# cheap-4 上，退回已验证可用的 sha-3c6a856
-docker pull ccr.ccs.tencentyun.com/yizuo/vaas-render-plane:sha-3c6a856
+# <node-b> 上，退回已验证可用的 sha-3c6a856
+docker pull <registry>/yizuo/vaas-render-plane:sha-3c6a856
 docker rm -f vaas-renderer
 docker run -d --name vaas-renderer --restart no --network vaas-render-ext \
-  --memory=4g --shm-size=2g -p 100.64.0.8:8099:8099 \
+  --memory=4g --shm-size=2g -p <render-node-b>:8099:8099 \
   -e VAAS_RENDER_MAX_CONCURRENCY=3 -e VAAS_RENDER_PORT=8099 \
   -e VAAS_RENDER_WORKDIR=/tmp/vaas-render \
   -e HYPERFRAMES_BROWSER_PATH=/usr/bin/chromium \
@@ -100,8 +100,8 @@ docker run -d --name vaas-renderer --restart no --network vaas-render-ext \
   -e HYPERFRAMES_NO_TELEMETRY=1 -e HYPERFRAMES_NO_AUTO_INSTALL=1 \
   -e HYPERFRAMES_NO_OPTIONAL_INSTALL=1 -e HYPERFRAMES_NO_UPDATE_CHECK=1 \
   -e HYPERFRAMES_CACHE_DIR=/tmp/hf-cache -e HYPERFRAMES_MEDIA_HOME=/tmp/hf-media \
-  ccr.ccs.tencentyun.com/yizuo/vaas-render-plane:sha-3c6a856
-curl -s http://100.64.0.8:8099/healthz
+  <registry>/yizuo/vaas-render-plane:sha-3c6a856
+curl -s http://<render-node-b>:8099/healthz
 docker ps --format '{{.Image}}' --filter name=vaas-renderer
 ```
 

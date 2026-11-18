@@ -365,25 +365,48 @@ def insert_distribution(
     status: str = "pending",
     error_message: Optional[str] = None,
     video_id: Optional[int] = None,
+    recipient: Optional[str] = None,
+    ack_declared: Optional[str] = None,
+    ack_actual: Optional[str] = None,
+    downgraded: bool = False,
+    idem_key: Optional[str] = None,
 ) -> int:
-    """Insert/update a distribution record (one row per asset+platform, last write wins)."""
+    """Insert/update a distribution record.
+
+    Identity is (asset, platform, recipient) since the CaaS change: the same
+    content may be broadcast to a platform AND delivered to a named recipient
+    on that same platform, and those are two receipts, not one. `recipient=None`
+    keeps the legacy meaning exactly ("the platform broadcast"), so old callers
+    that never pass it collapse to one row per (asset, platform) as before.
+
+    The conflict target must match the partial unique index
+    `uq_distribution_asset_platform_recipient` (COALESCE(recipient,'')), which
+    is why the target is spelled out rather than left as the bare column list.
+    """
     conn = get_connection()
     conn.execute(
         """
-        INSERT INTO distribution (asset_id, video_id, platform, url, status, error_message, published_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(asset_id, platform) DO UPDATE SET
+        INSERT INTO distribution
+            (asset_id, video_id, platform, url, status, error_message, published_at,
+             recipient, ack_declared, ack_actual, downgraded, idem_key)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(asset_id, platform, COALESCE(recipient, '')) DO UPDATE SET
             url = COALESCE(excluded.url, distribution.url),
             status = excluded.status,
             error_message = excluded.error_message,
-            published_at = excluded.published_at
+            published_at = excluded.published_at,
+            ack_declared = COALESCE(excluded.ack_declared, distribution.ack_declared),
+            ack_actual = COALESCE(excluded.ack_actual, distribution.ack_actual),
+            downgraded = excluded.downgraded,
+            idem_key = COALESCE(excluded.idem_key, distribution.idem_key)
         """,
-        (asset_id, video_id, platform, url, status, error_message, datetime.now().isoformat())
+        (asset_id, video_id, platform, url, status, error_message, datetime.now().isoformat(),
+         recipient, ack_declared, ack_actual, 1 if downgraded else 0, idem_key)
     )
     conn.commit()
     distribution_id = conn.execute(
-        "SELECT id FROM distribution WHERE asset_id = ? AND platform = ?",
-        (asset_id, platform)).fetchone()["id"]
+        "SELECT id FROM distribution WHERE asset_id = ? AND platform = ? AND COALESCE(recipient, '') = COALESCE(?, '')",
+        (asset_id, platform, recipient)).fetchone()["id"]
     conn.close()
     return distribution_id
 
