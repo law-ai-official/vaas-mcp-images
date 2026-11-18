@@ -102,13 +102,38 @@ def gc_expired_artifacts(now: float | None = None, ttl_days: int = ARTIFACT_TTL_
         tz=datetime.timezone.utc,
     ).isoformat()
     conn = get_connection()
+    # Skip anything a live row still references. The old query excluded only
+    # `distribution`, so an asset referenced from `generation_jobs` (or
+    # `variants` / `asset_history`) was selected for deletion and then blew up
+    # on the FK constraint — and because this runs at STARTUP, the process
+    # crash-looped: 2026-11-18 the asset from 2026-10-16 crossed the TTL and
+    # took the hosted service down on every restart.
+    #
+    # The FK guard is the real invariant ("referenced ⇒ keep"), so it is
+    # expressed once, over every referencing table, rather than maintained as a
+    # list that drifts each time a new table appears.
     rows = conn.execute(
         "SELECT id, file_path FROM assets WHERE stage = 'rendered' "
-        "AND created_at < ? AND id NOT IN (SELECT asset_id FROM distribution)",
+        "AND created_at < ? "
+        "AND id NOT IN (SELECT asset_id FROM distribution WHERE asset_id IS NOT NULL) "
+        "AND id NOT IN (SELECT asset_id FROM generation_jobs WHERE asset_id IS NOT NULL) "
+        "AND id NOT IN (SELECT asset_id FROM variants WHERE asset_id IS NOT NULL) "
+        "AND id NOT IN (SELECT asset_id FROM asset_history WHERE asset_id IS NOT NULL)",
         (cutoff,),
     ).fetchall()
     removed = 0
     for row in rows:
+        # Delete BEFORE touching files: if a FK still blocks the row (a reference
+        # table added after this query was written), the asset and its bytes must
+        # both survive. The old order removed the files first, so a blocked
+        # delete left a live asset row pointing at a directory that no longer
+        # existed. A GC that cannot delete is not allowed to fail the process
+        # either — this runs at startup.
+        try:
+            conn.execute("DELETE FROM assets WHERE id = ?", (row["id"],))
+        except Exception as exc:  # sqlite3.IntegrityError and anything else
+            log.warning("GC skipped %s (still referenced): %s", row["id"], exc)
+            continue
         file_path = row["file_path"]
         if file_path:
             target = (DOWNLOADS_DIR / file_path).resolve()
@@ -120,7 +145,6 @@ def gc_expired_artifacts(now: float | None = None, ttl_days: int = ARTIFACT_TTL_
                     shutil.rmtree(slug_dir, ignore_errors=True)
                 else:
                     log.warning("GC refused: path escapes downloads: %s", slug_dir)
-        conn.execute("DELETE FROM assets WHERE id = ?", (row["id"],))
         removed += 1
     conn.commit()
     conn.close()

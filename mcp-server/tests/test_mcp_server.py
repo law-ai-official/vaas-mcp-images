@@ -797,3 +797,48 @@ class TestCaasEnvelope:
             pytest.skip("authority file not present in this checkout")
         sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
         assert sha(copy) == sha(authority), "caas-forms.json 副本与权威文件不一致"
+
+
+class TestGcForeignKeySafety:
+    """GC 不能因外键引用而删掉被引用的 asset，也不能因此崩掉进程。
+
+    2026-11-18 生产事故：asset（2026-10-16）跨过 TTL 后被 GC 选中，但它还被
+    `generation_jobs` 引用 → `FOREIGN KEY constraint failed` → 启动即崩、无限重启。
+    旧查询只排除了 `distribution`，漏了其它引用表；且「先删文件后删行」的顺序
+    会让被外键挡住的那次删除留下一行指向已消失目录的 asset。
+    """
+
+    def test_referenced_asset_is_kept_and_gc_does_not_raise(self, isolated_db):
+        from mcp_server.db import get_connection
+        from mcp_server.main import gc_expired_artifacts
+
+        conn = get_connection()
+        # 一个「很老」的 rendered asset
+        conn.execute(
+            "INSERT INTO assets (id, type, slug, stage, created_at, updated_at) "
+            "VALUES ('old-asset', 'video', 'old', 'rendered', '2020-01-01T00:00:00+00:00', '2020-01-01T00:00:00+00:00')"
+        )
+        # 一个同样老、但无人引用的 asset（应被删）
+        conn.execute(
+            "INSERT INTO assets (id, type, slug, stage, created_at, updated_at) "
+            "VALUES ('free-asset', 'video', 'free', 'rendered', '2020-01-01T00:00:00+00:00', '2020-01-01T00:00:00+00:00')"
+        )
+        # generation_jobs 引用 old-asset（外键）
+        conn.execute(
+            "INSERT INTO generation_jobs (id, owner, kind, asset_id, status, created_at, expires_at) "
+            "VALUES ('job-1', 'test', 'video', 'old-asset', 'succeeded', "
+            "'2020-01-01T00:00:00+00:00', '2030-01-01T00:00:00+00:00')"
+        )
+        conn.commit()
+        conn.close()
+
+        # 关键断言 1：不抛
+        removed = gc_expired_artifacts(ttl_days=1)
+
+        conn = get_connection()
+        ids = {r["id"] for r in conn.execute("SELECT id FROM assets")}
+        conn.close()
+        # 关键断言 2：被引用的留下，无人引用的删掉
+        assert "old-asset" in ids, "referenced asset must survive"
+        assert "free-asset" not in ids, "unreferenced old asset must be collected"
+        assert removed == 1
